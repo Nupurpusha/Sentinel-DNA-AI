@@ -1,0 +1,161 @@
+STEP 2 — Build the real SentinelDNA Behavioral Anomaly Detection Engine.
+
+IMPORTANT:
+Do not redesign or rebuild the existing Step 1 application.
+Keep the existing FastAPI backend, SQLite database, synthetic dataset, Data Foundation page, and Identity Inspector working.
+
+The synthetic dataset contains a ground-truth `label` field. This field MUST NEVER be used as an input feature for anomaly detection, risk scoring, or attack classification. It may only be used AFTER prediction for evaluation.
+
+GOAL:
+Turn the existing per-identity baseline into a real explainable behavioral anomaly detector.
+
+1. BEHAVIORAL DNA
+
+For every identity, derive a Behavioral DNA profile ONLY from that identity's normal historical behavior.
+
+Include:
+- typical login/activity hour distribution
+- primary/known locations
+- known IP pattern
+- known device fingerprints
+- usual authentication methods
+- common resources
+- session-duration baseline
+- normal resource-access frequency
+- normal event frequency/rate
+
+Store or calculate this profile independently of the ground-truth anomaly label.
+
+2. FEATURE ENGINEERING
+
+For each event calculate behavioral deviation features such as:
+
+- unusual_hour_score
+- location_deviation
+- new_device_score
+- auth_method_deviation
+- resource_novelty
+- session_duration_deviation
+- event_frequency_deviation
+- geo_velocity / impossible-travel signal where possible
+- failed-auth burst signal
+- cross-account source-IP activity
+- resource breadth / lateral-movement signal
+
+Do not use `label` or anomaly_type as an input.
+
+3. ANOMALY MODEL
+
+Implement a real unsupervised anomaly detector using Isolation Forest from scikit-learn.
+
+Train it primarily on baseline/normal historical behavior.
+
+Produce for each scored event:
+
+anomaly_score
+risk_score (0-100)
+predicted_is_anomaly
+
+Combine the ML anomaly score with interpretable behavioral-deviation signals to create the final risk score.
+
+Risk bands:
+0-29 Low
+30-59 Medium
+60-79 High
+80-100 Critical
+
+4. EXPLAINABILITY
+
+Every flagged event must include human-readable contributing factors.
+
+Example:
+
+Risk Score: 91 — Critical
+
+Why flagged:
+- Login occurred outside this identity's normal activity window
+- Source location has never been observed for this identity
+- New device fingerprint detected
+- Authentication frequency is 4.8x above baseline
+
+Return structured reason codes AND human-readable explanations.
+
+5. ATTACK-TYPE INFERENCE
+
+Without reading the ground-truth label, infer the most likely behavioral category using the calculated signals:
+
+- brute_force
+- credential_stuffing
+- impossible_travel
+- device_spoofing
+- lateral_movement
+- low_slow_exfiltration
+- insider_drift
+- unknown_anomaly
+
+This can use transparent rule-based classification on top of the anomaly features. Do not cheat by reading the synthetic label.
+
+6. EVALUATION
+
+Only AFTER predictions are generated, compare them against the hidden ground-truth labels.
+
+Calculate:
+- precision
+- recall
+- F1
+- false positive rate
+- anomaly detection rate
+- attack-category accuracy where applicable
+
+Also calculate performance at a realistic alert budget: top 1% highest-risk events.
+
+7. API
+
+Add FastAPI endpoints for:
+- scoring events
+- retrieving highest-risk alerts
+- retrieving Behavioral DNA for an identity
+- model evaluation metrics
+
+Keep existing APIs working.
+
+8. MINIMAL UI
+
+Do NOT spend time redesigning the whole frontend.
+
+Add only one new navigation page called:
+"Threat Detection"
+
+It should show:
+- total analyzed events
+- Critical / High / Medium alerts
+- model evaluation metrics
+- ranked highest-risk alerts
+
+Each alert should show:
+entity ID
+risk score
+risk band
+predicted attack type
+timestamp
+top contributing reasons
+
+Clicking an alert should show the event versus that identity's Behavioral DNA baseline.
+
+CRITICAL VALIDATION:
+
+Before finishing, verify programmatically that removing or changing the ground-truth `label` column does NOT change predictions for the same event features.
+
+This proves there is no label leakage.
+
+Keep the implementation lightweight enough to run reliably on Replit.
+
+Do not add an LLM, RAG, threat graph, or other advanced features yet.
+
+At completion, report:
+1. files created/changed
+2. model used
+3. features used
+4. evaluation results
+5. confirmation that label leakage test passed
+6. any limitations
