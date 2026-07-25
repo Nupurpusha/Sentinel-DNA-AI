@@ -1,0 +1,154 @@
+STEP 4A — Temporal Behavioral Drift Backend
+
+SentinelDNA Steps 1–3 are COMPLETE and WORKING.
+
+This is a SMALL backend-only task.
+
+DO NOT:
+- redesign or modify the frontend
+- create new pages
+- rebuild existing functionality
+- change the dataset generator
+- replace Isolation Forest
+- change existing Step 3 risk scoring
+- change SOC alert-budget logic
+- refactor unrelated code
+
+GOAL:
+Add a lightweight temporal behavioral drift layer that detects suspicious patterns across sequences of events for each identity.
+
+This should help identify stealthy behavior such as gradual behavioral drift, low-and-slow activity, and lateral movement patterns that may not look highly anomalous as individual events.
+
+IMPORTANT:
+Ground-truth `label` and attack type are evaluation-only and must NEVER be used in temporal scoring, temporal reasons, risk calculation, or ranking.
+
+==================================================
+1. TEMPORAL DRIFT CALCULATION
+==================================================
+
+Using ONLY existing telemetry and behavioral information, analyze recent events for each identity in chronological order.
+
+Create:
+
+temporal_drift_score: 0–100
+
+Use a small set of meaningful sequence-level signals derived from existing data, such as:
+
+- expansion in distinct resources accessed compared with identity baseline
+- unusual increase in activity frequency
+- accumulation of multiple behavioral deviations over recent events
+- repeated authentication failures
+- increasing session-duration deviation
+- unusual device/location diversity
+
+Do not fabricate fields.
+
+Keep the calculation lightweight, deterministic and explainable.
+
+==================================================
+2. TEMPORAL REASONS
+==================================================
+
+Generate human-readable reasons for triggered temporal signals, for example:
+
+- "Resource access expanded beyond historical baseline"
+- "Behavioral deviations accumulated across recent activity"
+- "Authentication failures increased in recent activity"
+- "Activity frequency exceeded historical behavior"
+- "Device/location diversity increased"
+
+Reasons must come from actual calculated signals.
+
+==================================================
+3. TEMPORAL STATUS
+==================================================
+
+For each identity expose:
+
+- temporal_drift_score
+- temporal_status: Stable / Elevated / High Drift
+- temporal_reasons
+
+Use sensible documented thresholds.
+
+==================================================
+4. DO NOT REPLACE STEP 3 RISK
+==================================================
+
+For Step 4A, DO NOT modify the existing final risk score or Top-1% ranking yet.
+
+This task is ONLY to calculate and expose temporal intelligence.
+
+We will integrate temporal drift into ranking in a later step after validating it.
+
+==================================================
+5. API
+==================================================
+
+Add ONE lightweight endpoint, preferably:
+
+GET /sentinel-api/detection/temporal/{entity_id}
+
+Return:
+
+{
+  entity_id,
+  temporal_drift_score,
+  temporal_status,
+  temporal_reasons,
+  temporal_signals
+}
+
+Reuse existing backend structures wherever possible.
+
+Do not break any existing endpoint.
+
+==================================================
+6. EVALUATION
+==================================================
+
+For offline evaluation only, evaluate whether high temporal drift is associated with the existing stealthy attack categories:
+
+- lateral_movement
+- low_slow_exfiltration
+- insider_drift
+
+Labels may ONLY be read after temporal scores are calculated.
+
+Report the results, but DO NOT tune individual scores using labels.
+
+==================================================
+7. TEST
+==================================================
+
+Verify:
+
+- temporal scoring works for identities
+- endpoint returns valid results
+- scores are deterministic
+- ground-truth labels are not used in temporal calculation
+- existing label leakage test still passes
+- Step 1 still works
+- Step 2 still works
+- Step 3 still works
+
+Do NOT modify frontend files.
+
+Then STOP.
+
+FINAL REPORT ONLY:
+
+1. Files modified
+2. Exact temporal signals used
+3. Exact temporal drift formula
+4. Stable / Elevated / High Drift thresholds
+5. Example temporal result for one identity
+6. Offline findings for lateral_movement
+7. Offline findings for low_slow_exfiltration
+8. Offline findings for insider_drift
+9. Label leakage test result
+10. Confirmation Steps 1–3 still work
+
+Do not implement UI.
+Do not integrate temporal score into final risk yet.
+Do not continue to another step.
