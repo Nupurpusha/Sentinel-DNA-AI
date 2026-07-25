@@ -1,45 +1,54 @@
-# [Project name]
+# SentinelDNA
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+An AI-powered behavioral anomaly detection platform for cybersecurity. Generates synthetic access logs, trains an Isolation Forest ML model, and surfaces anomalies through a SOC analyst dashboard.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- **Python API** — managed by the `SentinelDNA Python API` workflow: `cd backend && python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload`
+- **React frontend** — managed by the `artifacts/sentinel-web: web` workflow: `pnpm --filter @workspace/sentinel-web run dev`
+
+The first time the backend runs, it generates ~51K synthetic events (30–60 seconds) and trains the ML model. Subsequent restarts skip generation if data already exists.
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- **Backend:** Python 3.11, FastAPI, SQLite (via `backend/sentinel.db`), pandas, numpy, scikit-learn (Isolation Forest)
+- **Frontend:** React 18, TypeScript, Vite, Tailwind CSS, shadcn/ui, TanStack Query, Recharts, Wouter
+- **Monorepo:** pnpm workspaces
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `backend/main.py` — FastAPI app and all API routes
+- `backend/generator.py` — Synthetic data generation (300 identities, 7 attack types)
+- `backend/detector.py` — Isolation Forest ML model training and anomaly scoring
+- `backend/detection_routes.py` — Detection/SOC API routes
+- `backend/database.py` — SQLite schema and connection
+- `backend/sentinel.db` — Pre-generated SQLite database (~25MB, committed)
+- `artifacts/sentinel-web/src/pages/` — DataFoundation, IdentityInspector, SocOverview, ModelPerformance
+- `artifacts/sentinel-web/src/App.tsx` — Router and layout
+
+## API Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/sentinel-api/summary` | Dataset statistics |
+| GET | `/sentinel-api/events` | Paginated events with filters |
+| GET | `/sentinel-api/identities` | All identities |
+| GET | `/sentinel-api/identities/{id}` | One identity's profile and event history |
+| POST | `/sentinel-api/regenerate` | Drop and regenerate the dataset |
+| GET | `/sentinel-api/export/csv` | Download events as CSV |
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- SQLite is used instead of Postgres — appropriate for a local/demo dataset (51K rows, pre-generated). No external DB dependency.
+- The ML model is trained at startup and cached in `model_cache.pkl`; training is skipped if the cache exists.
+- The Vite dev server proxies `/sentinel-api` → `localhost:8000` so the frontend and backend can run on separate ports without CORS issues.
+- Python packages are installed system-wide via `pip` (not uv/poetry) because Replit's NixOS environment uses Python 3.11.
 
-## Product
+## Gotchas
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- Python packages must be installed with `python3 -m pip install ...` (not `pip3` or uv) in this environment.
+- If the backend fails to start, check that Python packages are installed: `python3 -m pip list | grep fastapi`.
 
 ## User preferences
 
 _Populate as you build — explicit user instructions worth remembering across sessions._
-
-## Gotchas
-
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
