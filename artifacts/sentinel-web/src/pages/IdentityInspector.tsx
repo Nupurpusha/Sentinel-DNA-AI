@@ -204,7 +204,7 @@ export function IdentityInspector() {
                   {risk?.has_results && (
                     <div className="text-right">
                       <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">
-                        ML Risk Score
+                        Final Risk Score
                       </p>
                       <div className="flex items-center gap-2 justify-end">
                         <span className={cn("text-2xl font-mono font-bold", riskColor(risk.risk_level ?? "Low"))}>
@@ -220,6 +220,18 @@ export function IdentityInspector() {
                       <p className="text-xs text-muted-foreground mt-1">
                         {formatNumber(risk.detected_anomalies ?? 0)} anomalous events detected
                       </p>
+                      {risk.avg_behavioral_deviation != null && (
+                        <div className="flex items-center gap-2 justify-end mt-1.5">
+                          <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Behavioral Dev:</span>
+                          <span className="text-xs font-mono font-semibold text-orange-400">{risk.avg_behavioral_deviation}</span>
+                          {risk.avg_evidence_count != null && (
+                            <>
+                              <span className="text-muted-foreground text-[10px]">·</span>
+                              <span className="text-[10px] text-muted-foreground">avg {risk.avg_evidence_count?.toFixed(1)} signals</span>
+                            </>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                   <div className="text-right border-l border-border/50 pl-4">

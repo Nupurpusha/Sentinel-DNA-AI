@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
-import { ModelMetrics } from "@/types";
+import { ModelMetrics, AlertBudgetResponse, AttackCoverageResponse, DetectionStatus } from "@/types";
 import { formatNumber, cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, ShieldCheck, AlertTriangle, Info } from "lucide-react";
+import { RefreshCw, ShieldCheck, AlertTriangle, Info, CheckCircle2, XCircle, Shield } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
 } from "recharts";
@@ -27,14 +27,25 @@ function MetricCard({
 
 export function ModelPerformance() {
   const [metrics, setMetrics]   = useState<ModelMetrics | null>(null);
+  const [budget, setBudget]     = useState<AlertBudgetResponse | null>(null);
+  const [coverage, setCoverage] = useState<AttackCoverageResponse | null>(null);
+  const [status, setStatus]     = useState<DetectionStatus | null>(null);
   const [loading, setLoading]   = useState(true);
   const [running, setRunning]   = useState(false);
 
-  const fetchMetrics = async () => {
+  const fetchAll = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/sentinel-api/detection/metrics");
-      if (res.ok) setMetrics(await res.json());
+      const [metricsRes, budgetRes, coverageRes, statusRes] = await Promise.all([
+        fetch("/sentinel-api/detection/metrics"),
+        fetch("/sentinel-api/detection/alert-budget"),
+        fetch("/sentinel-api/detection/attack-coverage"),
+        fetch("/sentinel-api/detection/status"),
+      ]);
+      if (metricsRes.ok)   setMetrics(await metricsRes.json());
+      if (budgetRes.ok)    setBudget(await budgetRes.json());
+      if (coverageRes.ok)  setCoverage(await coverageRes.json());
+      if (statusRes.ok)    setStatus(await statusRes.json());
     } catch (err) {
       console.error(err);
     } finally {
@@ -42,13 +53,13 @@ export function ModelPerformance() {
     }
   };
 
-  useEffect(() => { fetchMetrics(); }, []);
+  useEffect(() => { fetchAll(); }, []);
 
   const handleRunDetection = async () => {
     setRunning(true);
     try {
       await fetch("/sentinel-api/detection/run?force=true", { method: "POST" });
-      await fetchMetrics();
+      await fetchAll();
     } catch (err) {
       console.error(err);
     } finally {
@@ -57,8 +68,8 @@ export function ModelPerformance() {
   };
 
   const hasResults = metrics?.has_results ?? false;
+  const leakagePassed = status?.label_leakage_test_passed ?? false;
 
-  // Confusion matrix bar chart data
   const cmData = hasResults
     ? [
         { label: "True Positives",  value: metrics!.true_positives ?? 0,  color: "#10b981" },
@@ -70,6 +81,12 @@ export function ModelPerformance() {
 
   const pct = (v?: number) =>
     v !== undefined ? `${(v * 100).toFixed(1)}%` : "—";
+
+  const budgetPctColor = (pct: number) => {
+    if (pct >= 0.6)  return "text-emerald-500";
+    if (pct >= 0.35) return "text-yellow-500";
+    return "text-orange-500";
+  };
 
   return (
     <div className="container py-8 px-4 md:px-8 max-w-7xl mx-auto space-y-6">
@@ -92,7 +109,7 @@ export function ModelPerformance() {
         </Button>
       </div>
 
-      {/* Important notice */}
+      {/* Data leakage notice */}
       <div className="flex items-start gap-3 px-4 py-3 rounded-lg border border-primary/20 bg-primary/5 text-sm">
         <Info className="h-4 w-4 text-primary mt-0.5 shrink-0" />
         <div>
@@ -122,16 +139,48 @@ export function ModelPerformance() {
         <div className="space-y-4 animate-pulse">
           <div className="grid grid-cols-3 gap-4">{[...Array(3)].map((_, i) => <div key={i} className="h-24 bg-muted/30 rounded-lg border border-border/50" />)}</div>
           <div className="grid grid-cols-2 gap-4">{[...Array(2)].map((_, i) => <div key={i} className="h-32 bg-muted/30 rounded-lg border border-border/50" />)}</div>
+          <div className="h-48 bg-muted/30 rounded-lg border border-border/50" />
+          <div className="h-48 bg-muted/30 rounded-lg border border-border/50" />
         </div>
       )}
 
       {!loading && hasResults && metrics && (
         <>
-          {/* Primary metrics */}
+          {/* ── Label Leakage Test ───────────────────────────────────────────── */}
+          <div className="flex items-center gap-3 px-4 py-3 rounded-lg border border-border/50 bg-muted/5">
+            <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
+            <div className="flex-1">
+              <span className="text-sm font-medium">Label Leakage Validation Test</span>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Proves that shuffling/replacing ground-truth labels produces identical ML scores,
+                behavioral deviation scores, evidence counts, final risk scores, and event rankings.
+              </p>
+            </div>
+            {leakagePassed ? (
+              <div className="flex items-center gap-1.5 shrink-0">
+                <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                <span className="text-sm font-semibold text-emerald-500 font-mono">PASSED</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 shrink-0">
+                <XCircle className="h-4 w-4 text-red-500" />
+                <span className="text-sm font-semibold text-red-500 font-mono">
+                  {status ? "FAILED" : "UNKNOWN"}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* ── Original model metrics (Step 2, preserved) ───────────────────── */}
           <div>
             <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-              Classification Metrics
+              Raw Detector Metrics — Isolation Forest with IF threshold (contamination = 5%)
             </h2>
+            <p className="text-xs text-muted-foreground mb-3">
+              These metrics reflect the <strong>raw Isolation Forest decision boundary</strong> at contamination=0.05.
+              High recall, lower precision — expected for an unsupervised anomaly detector at 5% flagging rate.
+              See the SOC Alert Budget section below for operational precision at reduced alert volumes.
+            </p>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
               <MetricCard label="Precision" value={pct(metrics.precision)} color="text-primary"
                 description="Fraction of predicted anomalies that are real" />
@@ -141,7 +190,7 @@ export function ModelPerformance() {
                 description="Harmonic mean of precision and recall" />
               {metrics.roc_auc != null && (
                 <MetricCard label="ROC-AUC" value={metrics.roc_auc.toFixed(3)} color="text-emerald-500"
-                  description="Area under the ROC curve" />
+                  description="Area under the ROC curve — ranking quality" />
               )}
             </div>
           </div>
@@ -149,7 +198,7 @@ export function ModelPerformance() {
           {/* Confusion matrix counts */}
           <div>
             <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-              Detection Counts
+              Detection Counts — Raw Detector
             </h2>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <MetricCard label="True Positives" value={formatNumber(metrics.true_positives ?? 0)} color="text-emerald-500"
@@ -165,7 +214,6 @@ export function ModelPerformance() {
 
           {/* Charts row */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* Bar chart */}
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
@@ -191,7 +239,6 @@ export function ModelPerformance() {
               </CardContent>
             </Card>
 
-            {/* Coverage summary */}
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
@@ -226,6 +273,142 @@ export function ModelPerformance() {
               </CardContent>
             </Card>
           </div>
+
+          {/* ── Step 3: SOC Alert Budget Analysis ───────────────────────────── */}
+          {budget?.has_results && budget.budgets && (
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center gap-2">
+                  <CardTitle className="text-base">SOC Alert Budget Analysis</CardTitle>
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 border border-primary/30 text-primary">
+                    Step 3
+                  </Badge>
+                </div>
+                <CardDescription className="text-xs mt-1">
+                  {budget.note ??
+                    "Events are ranked using unsupervised behavioral risk. Ground-truth labels are applied only after ranking for offline evaluation."}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-auto">
+                  <table className="w-full text-sm text-left">
+                    <thead className="text-xs text-muted-foreground bg-muted/20 uppercase font-mono tracking-wider border-y border-border/50">
+                      <tr>
+                        <th className="px-4 py-3 font-medium">Alert Budget</th>
+                        <th className="px-4 py-3 font-medium">Alert Count</th>
+                        <th className="px-4 py-3 font-medium">Precision</th>
+                        <th className="px-4 py-3 font-medium">Recall</th>
+                        <th className="px-4 py-3 font-medium">F1</th>
+                        <th className="px-4 py-3 font-medium">True Pos</th>
+                        <th className="px-4 py-3 font-medium">False Pos</th>
+                        <th className="px-4 py-3 font-medium">False Neg</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/50 font-mono text-xs">
+                      {budget.budgets.map((row) => (
+                        <tr
+                          key={row.budget_pct}
+                          className={cn(
+                            "hover:bg-muted/10 transition-colors",
+                            row.budget_pct === 1.0 && "bg-primary/5 border-l-2 border-l-primary",
+                          )}
+                        >
+                          <td className="px-4 py-3 font-medium">
+                            Top {row.budget_pct}%
+                            {row.budget_pct === 1.0 && (
+                              <span className="ml-1.5 text-[9px] uppercase tracking-wider text-primary font-semibold">Primary</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">{formatNumber(row.alert_count)}</td>
+                          <td className={cn("px-4 py-3 font-bold", budgetPctColor(row.precision))}>
+                            {pct(row.precision)}
+                          </td>
+                          <td className="px-4 py-3">{pct(row.recall)}</td>
+                          <td className="px-4 py-3">{pct(row.f1_score)}</td>
+                          <td className="px-4 py-3 text-emerald-500">{formatNumber(row.true_positives)}</td>
+                          <td className="px-4 py-3 text-orange-500">{formatNumber(row.false_positives)}</td>
+                          <td className="px-4 py-3 text-red-500">{formatNumber(row.false_negatives)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="px-4 py-2 border-t border-border/50 text-[11px] text-muted-foreground">
+                  Total events: {formatNumber(budget.total_events ?? 0)} · True attacks: {formatNumber(budget.total_attacks ?? 0)}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* ── Step 3: Detection Coverage by Attack Type ────────────────────── */}
+          {coverage?.has_results && coverage.coverage && (
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center gap-2">
+                  <CardTitle className="text-base">Detection Coverage by Attack Type</CardTitle>
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 border border-primary/30 text-primary">
+                    Top 1% · Offline Evaluation
+                  </Badge>
+                </div>
+                <CardDescription className="text-xs mt-1">
+                  {coverage.note ??
+                    "Shows which attack behaviors SentinelDNA detects particularly well within the top-1% alert budget. Attack categories are applied ONLY after ranking."}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-auto">
+                  <table className="w-full text-sm text-left">
+                    <thead className="text-xs text-muted-foreground bg-muted/20 uppercase font-mono tracking-wider border-y border-border/50">
+                      <tr>
+                        <th className="px-4 py-3 font-medium">Attack Type</th>
+                        <th className="px-4 py-3 font-medium">Total GT Events</th>
+                        <th className="px-4 py-3 font-medium">Captured in Top 1%</th>
+                        <th className="px-4 py-3 font-medium">Coverage</th>
+                        <th className="px-4 py-3 font-medium w-40">Detection Bar</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/50 font-mono text-xs">
+                      {coverage.coverage.map((row) => {
+                        const coverageColor =
+                          row.coverage_pct >= 70 ? "bg-emerald-500" :
+                          row.coverage_pct >= 40 ? "bg-yellow-500" :
+                          "bg-orange-500";
+                        const textColor =
+                          row.coverage_pct >= 70 ? "text-emerald-500" :
+                          row.coverage_pct >= 40 ? "text-yellow-500" :
+                          "text-orange-500";
+                        return (
+                          <tr key={row.attack_type} className="hover:bg-muted/10 transition-colors">
+                            <td className="px-4 py-3 font-medium">
+                              <code className="text-xs bg-muted/30 px-1.5 py-0.5 rounded">
+                                {row.attack_type}
+                              </code>
+                            </td>
+                            <td className="px-4 py-3 text-muted-foreground">{formatNumber(row.total_gt)}</td>
+                            <td className="px-4 py-3">{formatNumber(row.captured_top1)}</td>
+                            <td className={cn("px-4 py-3 font-bold", textColor)}>
+                              {row.coverage_pct.toFixed(1)}%
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="w-full bg-muted/30 rounded-full h-1.5 overflow-hidden">
+                                <div
+                                  className={cn("h-full rounded-full", coverageColor)}
+                                  style={{ width: `${row.coverage_pct}%` }}
+                                />
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="px-4 py-2 border-t border-border/50 text-[11px] text-muted-foreground">
+                  Alert budget: top {coverage.budget_pct}% = {formatNumber(coverage.alert_count ?? 0)} events
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </>
       )}
     </div>

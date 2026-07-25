@@ -1,0 +1,622 @@
+STEP 3 — SentinelDNA Precision Calibration, SOC Alert Budget & High-Confidence Prioritization
+
+CONTEXT
+
+This is an EXISTING and WORKING SentinelDNA application.
+
+Step 1 and Step 2 are already implemented and verified.
+
+The current system contains:
+- React + TypeScript frontend
+- Python FastAPI backend
+- SQLite database
+- 50,000+ synthetic cybersecurity telemetry events
+- 300 identities
+- Identity behavioral profiles / Behavioral DNA
+- Isolation Forest unsupervised anomaly detection
+- Behavioral deviation features
+- Explainable risk scoring
+- Data Foundation
+- Identity Inspector
+- SOC Overview
+- Model Performance
+- Existing detection APIs
+
+DO NOT rebuild, redesign, replace, or simplify the existing application.
+
+==================================================
+CURRENT PROBLEM
+==================================================
+
+The current detector has strong anomaly ranking but produces too many operational alerts.
+
+Current evaluation is approximately:
+
+Precision: 13.7%
+Recall: 85.2%
+F1: 23.6%
+ROC-AUC: ~0.969
+
+True Positives: ~351
+False Positives: ~2,210
+False Negatives: ~61
+
+The current Isolation Forest uses contamination around 0.05, which contributes to roughly 5% of events being flagged even though the dataset is extremely imbalanced.
+
+The goal of Step 3 is NOT simply to make the metrics look better.
+
+The goal is to convert SentinelDNA into a SOC-oriented prioritization engine that ranks anomalies and gives analysts a small, high-confidence alert queue.
+
+==================================================
+ABSOLUTE DATA-LEAKAGE RULE
+==================================================
+
+The existing ground-truth `label` field is EVALUATION ONLY.
+
+NEVER use `label` or attack type:
+
+- as an ML feature
+- in Isolation Forest training
+- in anomaly-score calculation
+- in behavioral-deviation calculation
+- in risk-score calculation
+- to decide risk level
+- to rank alerts
+- to choose individual predictions
+- to determine the operational alert threshold
+
+Ground truth may ONLY be consulted AFTER risk scores/rankings have been generated to calculate offline evaluation metrics.
+
+==================================================
+1. AUDIT CURRENT STEP 2 BEFORE MODIFYING
+==================================================
+
+First inspect the current:
+
+- detector.py
+- detection_routes.py
+- database.py
+- generator.py
+- main.py
+- scored-event schema
+- frontend SOC Overview
+- Model Performance
+- Identity Inspector
+
+Understand and preserve the existing architecture.
+
+Before modifying it, determine:
+
+- exact Isolation Forest features
+- current contamination value
+- current anomaly-score normalization
+- current risk-score formula
+- current predicted_anomaly logic
+- current Low/Medium/High/Critical thresholds
+- current explanation-generation logic
+
+Do not replace working components unnecessarily.
+
+==================================================
+2. SEPARATE ANOMALY RANKING FROM SOC ALERTING
+==================================================
+
+Refactor the conceptual pipeline into:
+
+Behavioral telemetry
+        ↓
+Behavioral deviation features
+        ↓
+Isolation Forest anomaly score
+        ↓
+Behavioral evidence score
+        ↓
+Final risk score
+        ↓
+Ranked events
+        ↓
+SOC operational alert budget
+
+Do NOT equate:
+
+Isolation Forest contamination = percentage of SOC alerts.
+
+Isolation Forest should primarily contribute a continuous anomaly signal.
+
+Operational alerts must be determined separately from the final ranked risk distribution.
+
+==================================================
+3. BEHAVIORAL EVIDENCE SCORE
+==================================================
+
+Using the behavioral deviation features already implemented in Step 2, calculate an interpretable:
+
+behavioral_deviation_score: 0–100
+
+and:
+
+evidence_count
+
+Evidence may include legitimate existing deviations such as:
+
+- unknown device
+- unseen/unusual location
+- access outside normal hours
+- unfamiliar resource
+- unusual authentication method
+- authentication failure
+- abnormal session duration
+- unusual IP/subnet
+- abnormal recent access frequency
+
+Do NOT fabricate deviations.
+
+Only use signals derivable from the existing telemetry and identity profile.
+
+One weak deviation should not automatically create a Critical alert.
+
+Multiple independent deviations occurring together should increase confidence.
+
+Example concept:
+
+1 weak deviation
+→ low/moderate evidence
+
+3 independent meaningful deviations
+→ strong evidence
+
+4+ strong independent deviations combined with a high ML anomaly score
+→ potentially High/Critical
+
+The implementation must remain deterministic and explainable.
+
+==================================================
+4. IMPROVE FINAL RISK SCORE
+==================================================
+
+Create an explainable final risk score from:
+
+A. normalized Isolation Forest anomaly strength
+
+AND
+
+B. behavioral deviation/evidence strength
+
+Do not use attack labels.
+
+Use a clearly documented formula.
+
+The formula should reward agreement between the unsupervised ML model and behavioral deviation engine.
+
+For example, conceptually:
+
+ML thinks event is unusual
++
+multiple Behavioral DNA deviations
+=
+high-confidence risk
+
+while:
+
+ML moderately unusual
++
+only one weak deviation
+=
+lower operational priority
+
+Do NOT use random scoring.
+
+Do NOT hard-code scores based on attack category.
+
+Persist/expose:
+
+- ml_anomaly_score
+- behavioral_deviation_score
+- evidence_count
+- final risk_score
+- risk_level
+- explanations
+
+==================================================
+5. CALIBRATE RISK LEVELS
+==================================================
+
+Recalibrate:
+
+Low
+Medium
+High
+Critical
+
+to represent operational severity.
+
+Critical should be genuinely rare.
+
+High and Critical should represent events with strong combined ML + behavioral evidence.
+
+Do NOT simply divide 0–100 into four equal ranges unless analysis justifies it.
+
+Document the final thresholds.
+
+==================================================
+6. SOC ALERT BUDGET
+==================================================
+
+Implement an operational SOC Alert Budget based on ranked FINAL RISK SCORES.
+
+Support these investigation budgets:
+
+Top 0.5%
+Top 1%
+Top 2%
+Top 5%
+
+For each budget:
+
+1. Rank all events by final risk score descending.
+2. Select the highest-risk N% of events.
+3. Only AFTER selection, compare with ground truth for offline evaluation.
+
+Calculate:
+
+- alert count
+- true positives
+- false positives
+- false negatives
+- precision
+- recall
+- F1 score
+
+Ground truth must NOT influence the ranking.
+
+==================================================
+7. TOP-1% PRIORITY ALERT QUEUE
+==================================================
+
+Make Top 1% the primary SOC demo mode.
+
+Add a new section near the top of SOC Overview:
+
+PRIORITY ALERT QUEUE
+
+This should contain approximately the highest-risk 1% of scored events.
+
+For ~51,000 events this should naturally be around ~510 events, but calculate it dynamically from the dataset size.
+
+Rank highest risk first.
+
+Each alert should show:
+
+- Timestamp
+- Entity ID
+- Entity Type
+- Final Risk Score
+- Risk Level
+- Evidence Count
+- Primary Behavioral Reason
+- Resource
+- Location
+
+Clicking Entity ID should open the existing Identity Inspector.
+
+Do NOT remove the existing SOC Overview sections.
+
+==================================================
+8. TOP-1% KPI METRICS
+==================================================
+
+Add prominent SOC metrics:
+
+TOP-1% ALERT PRECISION
+
+Meaning:
+
+"Of the highest-risk 1% of events investigated by the analyst, what percentage are genuine attacks?"
+
+And:
+
+ATTACK COVERAGE @ TOP 1%
+
+Meaning:
+
+"What percentage of all true attacks are contained within the highest-risk 1%?"
+
+Also show:
+
+TOP-1% ALERT COUNT
+
+These metrics must be calculated offline using ground truth AFTER ranking.
+
+Clearly communicate this in the UI.
+
+==================================================
+9. ALERT BUDGET ANALYSIS
+==================================================
+
+Enhance Model Performance with:
+
+SOC ALERT BUDGET ANALYSIS
+
+Display a comparison table or compact visualization:
+
+Budget | Alerts | Precision | Recall | F1 | TP | FP
+0.5%
+1%
+2%
+5%
+
+The ranking must remain identical regardless of ground-truth labels.
+
+Ground truth is used only to evaluate each cutoff.
+
+Add explanatory text:
+
+"Events are ranked using unsupervised behavioral risk. Ground-truth labels are applied only after ranking for offline evaluation."
+
+==================================================
+10. ATTACK-TYPE COVERAGE
+==================================================
+
+For OFFLINE EVALUATION ONLY, calculate how the operational Top-1% alert queue performs across the existing ground-truth attack categories.
+
+For every attack category show:
+
+- Attack Type
+- Total Ground-Truth Events
+- Events Captured in Top 1%
+- Detection Coverage %
+
+Do NOT use these attack categories during scoring.
+
+Add a compact:
+
+DETECTION COVERAGE BY ATTACK TYPE
+
+section to Model Performance.
+
+This helps demonstrate which attack behaviors SentinelDNA detects particularly well.
+
+==================================================
+11. LABEL LEAKAGE VALIDATION
+==================================================
+
+Implement a programmatic test proving that labels do not influence scoring.
+
+For a deterministic sample of events:
+
+1. Score the original feature data.
+2. Shuffle/change/remove the ground-truth labels.
+3. Score the SAME feature data again.
+4. Compare:
+
+- ML anomaly score
+- behavioral deviation score
+- evidence count
+- final risk score
+- ranking
+
+These values must remain unchanged.
+
+Return:
+
+label_leakage_test_passed: true
+
+only if the test genuinely passes.
+
+Expose the result through the detection metrics/status API.
+
+Display a small verification indicator in Model Performance:
+
+"Label Leakage Test: PASSED"
+
+Do NOT hard-code this result.
+
+==================================================
+12. PRESERVE ORIGINAL MODEL METRICS
+==================================================
+
+Do NOT hide the original detector's performance.
+
+Keep showing:
+
+- Precision
+- Recall
+- F1
+- ROC-AUC
+- TP
+- FP
+- FN
+- TN
+
+Then separately show the operational Top-1% metrics.
+
+This allows us to demonstrate:
+
+Raw anomaly detector
+vs
+SOC-prioritized alert queue
+
+and makes the tradeoff transparent.
+
+==================================================
+13. DO NOT GAME PRECISION
+==================================================
+
+Do NOT artificially improve precision by:
+
+- looking at ground truth when selecting threshold
+- changing attack labels
+- reducing alerts to an arbitrarily tiny number
+- hard-coding known attacks
+- using attack type in scoring
+- supervised classification
+- manually selecting known attack events
+
+The purpose is legitimate unsupervised prioritization.
+
+==================================================
+14. API EXTENSIONS
+==================================================
+
+Extend the existing FastAPI detection API cleanly as needed for:
+
+- behavioral deviation score
+- evidence count
+- priority alert queue
+- alert-budget analysis
+- Top-1% metrics
+- attack-type coverage
+- label leakage test
+
+Preserve all existing endpoints.
+
+Do not break Step 1 or Step 2 frontend calls.
+
+==================================================
+15. FRONTEND CHANGES
+==================================================
+
+Do NOT redesign SentinelDNA.
+
+Preserve the current dark cybersecurity design and navigation.
+
+Data Foundation:
+NO major changes.
+
+Identity Inspector:
+Preserve existing content.
+Where useful, expose:
+- behavioral deviation score
+- evidence count
+alongside existing risk information.
+
+SOC Overview:
+Add:
+- Top-1% Alert Precision
+- Attack Coverage @ Top 1%
+- Priority Alert Queue
+
+Preserve:
+- existing summary cards
+- risk distribution
+- anomaly trend
+- highest-risk identities
+- existing high-risk event functionality
+
+Model Performance:
+Preserve current metrics and add:
+- SOC Alert Budget Analysis
+- Detection Coverage by Attack Type
+- Label Leakage Test status
+
+==================================================
+16. PERFORMANCE
+==================================================
+
+Keep the application lightweight enough for Replit.
+
+Do NOT retrain Isolation Forest on every API GET request.
+
+Reuse/persist detection results appropriately.
+
+The Priority Alert Queue and alert-budget endpoints should query existing scored results rather than repeatedly training the model.
+
+==================================================
+17. REGENERATION
+==================================================
+
+The existing Regenerate Dataset functionality must continue working.
+
+After dataset regeneration:
+
+- behavioral profiles regenerate
+- detection reruns
+- final risk scores regenerate
+- evidence scores regenerate
+- operational rankings regenerate
+- Top-1% metrics update dynamically
+
+Do not hard-code values for the current 51,209-event dataset.
+
+==================================================
+18. REGRESSION TEST
+==================================================
+
+After implementation verify ALL of the following:
+
+STEP 1:
+- Data Foundation loads
+- telemetry loads
+- filters work
+- search works
+- Export CSV works
+- Regenerate Dataset works
+- Identity Inspector baseline works
+
+STEP 2:
+- Isolation Forest runs
+- scored events exist
+- behavioral explanations exist
+- SOC Overview works
+- Model Performance works
+- existing detection endpoints work
+
+STEP 3:
+- behavioral_deviation_score exists
+- evidence_count exists
+- final risk ranking works
+- Priority Alert Queue works
+- Top-1% metrics work
+- 0.5/1/2/5% alert-budget metrics work
+- attack-type coverage works
+- label leakage test genuinely passes
+- no obvious frontend errors
+- no obvious backend errors
+
+==================================================
+19. FINAL REPORT — STOP AFTER THIS
+==================================================
+
+When implementation and testing are complete, STOP.
+
+Report exactly:
+
+1. Files created
+2. Files modified
+3. Isolation Forest configuration before and after
+4. Exact ML features used
+5. Exact behavioral deviation calculation
+6. Exact evidence_count calculation
+7. Exact final risk-score formula
+8. Exact Low/Medium/High/Critical thresholds
+9. How operational alerts are selected
+10. Original model Precision / Recall / F1 / ROC-AUC
+11. Top-0.5% Precision / Recall / F1
+12. Top-1% Precision / Recall / F1
+13. Top-2% Precision / Recall / F1
+14. Top-5% Precision / Recall / F1
+15. Top-1% alert count
+16. Top-1% attack coverage
+17. Coverage by attack category
+18. Label leakage test result
+19. Confirmation that Step 1 regression tests passed
+20. Confirmation that Step 2 regression tests passed
+
+Do NOT proceed to another development step after reporting.
+
+==================================================
+CRITICAL RULES
+==================================================
+
+- NEVER use `label` as an ML feature.
+- NEVER use attack type in risk scoring.
+- NEVER use ground truth to rank alerts.
+- NEVER use ground truth to choose individual predictions.
+- NEVER hard-code predictions.
+- NEVER generate random risk scores.
+- NEVER fake evaluation metrics.
+- Do NOT convert the system to supervised classification.
+- Do NOT rebuild Step 1.
+- Do NOT rebuild Step 2.
+- Do NOT redesign the application.
+- Preserve the existing working architecture.

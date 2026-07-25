@@ -65,6 +65,8 @@ def drop_all():
         conn.executescript("""
             DROP TABLE IF EXISTS events;
             DROP TABLE IF EXISTS identities;
+            DROP TABLE IF EXISTS detection_results;
+            DROP TABLE IF EXISTS detection_meta;
         """)
         conn.commit()
     finally:

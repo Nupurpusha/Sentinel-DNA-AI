@@ -3,6 +3,7 @@ import { Link, useLocation } from "wouter";
 import {
   DetectionSummary, DetectionStatus, HighRiskEventsResponse,
   TopIdentitiesResponse, RiskTrendResponse, ScoredEvent,
+  PriorityAlertsResponse, PriorityAlert, Top1Metrics,
 } from "@/types";
 import { formatNumber, formatDate, cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -14,7 +15,7 @@ import {
 } from "recharts";
 import {
   ShieldAlert, AlertTriangle, Activity, TrendingUp, RefreshCw,
-  User, Server, Cpu, ChevronRight,
+  User, Server, Cpu, ChevronRight, Target, Crosshair, Bell,
 } from "lucide-react";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -45,7 +46,7 @@ const RISK_COLORS: Record<string, string> = {
 };
 
 function EntityIcon({ type }: { type: string }) {
-  if (type === "user")          return <User className="h-3.5 w-3.5" />;
+  if (type === "user")            return <User className="h-3.5 w-3.5" />;
   if (type === "service_account") return <Server className="h-3.5 w-3.5" />;
   return <Cpu className="h-3.5 w-3.5" />;
 }
@@ -54,29 +55,36 @@ function EntityIcon({ type }: { type: string }) {
 
 export function SocOverview() {
   const [, setLocation] = useLocation();
-  const [status, setStatus]   = useState<DetectionStatus | null>(null);
-  const [summary, setSummary] = useState<DetectionSummary | null>(null);
-  const [highRisk, setHighRisk] = useState<ScoredEvent[]>([]);
-  const [topIds, setTopIds]   = useState<TopIdentitiesResponse | null>(null);
-  const [trend, setTrend]     = useState<RiskTrendResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [running, setRunning] = useState(false);
+  const [status, setStatus]         = useState<DetectionStatus | null>(null);
+  const [summary, setSummary]       = useState<DetectionSummary | null>(null);
+  const [highRisk, setHighRisk]     = useState<ScoredEvent[]>([]);
+  const [topIds, setTopIds]         = useState<TopIdentitiesResponse | null>(null);
+  const [trend, setTrend]           = useState<RiskTrendResponse | null>(null);
+  const [priorityAlerts, setPriorityAlerts] = useState<PriorityAlertsResponse | null>(null);
+  const [top1Metrics, setTop1Metrics]       = useState<Top1Metrics | null>(null);
+  const [loading, setLoading]       = useState(true);
+  const [running, setRunning]       = useState(false);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [statusRes, summaryRes, highRiskRes, topIdsRes, trendRes] = await Promise.all([
-        fetch("/sentinel-api/detection/status"),
-        fetch("/sentinel-api/detection/summary"),
-        fetch("/sentinel-api/detection/high-risk?limit=15"),
-        fetch("/sentinel-api/detection/top-identities?limit=10"),
-        fetch("/sentinel-api/detection/risk-trend"),
-      ]);
+      const [statusRes, summaryRes, highRiskRes, topIdsRes, trendRes, alertsRes, top1Res] =
+        await Promise.all([
+          fetch("/sentinel-api/detection/status"),
+          fetch("/sentinel-api/detection/summary"),
+          fetch("/sentinel-api/detection/high-risk?limit=15"),
+          fetch("/sentinel-api/detection/top-identities?limit=10"),
+          fetch("/sentinel-api/detection/risk-trend"),
+          fetch("/sentinel-api/detection/priority-alerts?budget_pct=1"),
+          fetch("/sentinel-api/detection/top1-metrics"),
+        ]);
       if (statusRes.ok)   setStatus(await statusRes.json());
       if (summaryRes.ok)  setSummary(await summaryRes.json());
       if (highRiskRes.ok) setHighRisk((await highRiskRes.json()).events ?? []);
       if (topIdsRes.ok)   setTopIds(await topIdsRes.json());
       if (trendRes.ok)    setTrend(await trendRes.json());
+      if (alertsRes.ok)   setPriorityAlerts(await alertsRes.json());
+      if (top1Res.ok)     setTop1Metrics(await top1Res.json());
     } catch (err) {
       console.error(err);
     } finally {
@@ -99,18 +107,19 @@ export function SocOverview() {
   };
 
   const hasResults = status?.has_results ?? false;
+  const hasTop1    = top1Metrics?.has_results ?? false;
 
-  // Pie chart data
   const pieData = summary?.by_risk_level
     ? Object.entries(summary.by_risk_level).map(([name, value]) => ({ name, value }))
     : [];
 
-  // Trend data (last 30 days)
   const trendData = (trend?.trend ?? []).slice(-30).map((d) => ({
-    day: d.day.slice(5),   // MM-DD
+    day:       d.day.slice(5),
     anomalies: d.anomalies,
-    avgRisk: Math.round(d.avg_risk_score),
+    avgRisk:   Math.round(d.avg_risk_score),
   }));
+
+  const pct = (v?: number) => v !== undefined ? `${(v * 100).toFixed(1)}%` : "—";
 
   return (
     <div className="container py-8 px-4 md:px-8 max-w-7xl mx-auto space-y-6">
@@ -146,37 +155,180 @@ export function SocOverview() {
         </div>
       )}
 
-      {/* Stats row */}
       {hasResults && summary && (
         <>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatCard
-              label="Total Scored Events"
-              value={formatNumber(summary.total_scored ?? 0)}
-              icon={<Activity className="h-4 w-4" />}
-              color="text-primary"
-            />
-            <StatCard
-              label="Detected Anomalies"
-              value={formatNumber(summary.detected_anomalies ?? 0)}
-              icon={<AlertTriangle className="h-4 w-4" />}
-              color="text-orange-500"
-            />
-            <StatCard
-              label="High / Critical Events"
-              value={formatNumber(summary.high_critical_count ?? 0)}
-              icon={<ShieldAlert className="h-4 w-4" />}
-              color="text-red-500"
-            />
-            <StatCard
-              label="Average Risk Score"
-              value={`${summary.avg_risk_score ?? 0}`}
-              icon={<TrendingUp className="h-4 w-4" />}
-              color="text-yellow-500"
-            />
+          {/* ── Step 3: Top-1% KPI Metrics ─────────────────────────────────── */}
+          {hasTop1 && top1Metrics && (
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <Target className="h-4 w-4 text-primary" />
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                  Priority Alert Performance — Top 1%
+                </h2>
+                <span className="text-[10px] text-muted-foreground border border-border/50 rounded px-1.5 py-0.5 font-mono">
+                  Offline evaluation · ground truth applied after ranking
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <StatCard
+                  label="Top-1% Alert Precision"
+                  value={pct(top1Metrics.precision)}
+                  subtitle={`${formatNumber(top1Metrics.true_positives ?? 0)} of ${formatNumber(top1Metrics.alert_count ?? 0)} alerts are real attacks`}
+                  icon={<Target className="h-4 w-4" />}
+                  color="text-primary"
+                />
+                <StatCard
+                  label="Attack Coverage @ Top 1%"
+                  value={pct(top1Metrics.recall)}
+                  subtitle={`${formatNumber(top1Metrics.true_positives ?? 0)} of ${formatNumber(top1Metrics.total_attacks ?? 0)} true attacks captured`}
+                  icon={<Crosshair className="h-4 w-4" />}
+                  color="text-orange-500"
+                />
+                <StatCard
+                  label="Top-1% Alert Count"
+                  value={formatNumber(top1Metrics.alert_count ?? 0)}
+                  subtitle={`of ${formatNumber(top1Metrics.total_events ?? 0)} total scored events`}
+                  icon={<Bell className="h-4 w-4" />}
+                  color="text-yellow-500"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* ── Original Stats row ──────────────────────────────────────────── */}
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+              Detection Overview
+            </h2>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <StatCard
+                label="Total Scored Events"
+                value={formatNumber(summary.total_scored ?? 0)}
+                icon={<Activity className="h-4 w-4" />}
+                color="text-primary"
+              />
+              <StatCard
+                label="Detected Anomalies"
+                value={formatNumber(summary.detected_anomalies ?? 0)}
+                icon={<AlertTriangle className="h-4 w-4" />}
+                color="text-orange-500"
+              />
+              <StatCard
+                label="High / Critical Events"
+                value={formatNumber(summary.high_critical_count ?? 0)}
+                icon={<ShieldAlert className="h-4 w-4" />}
+                color="text-red-500"
+              />
+              <StatCard
+                label="Average Risk Score"
+                value={`${summary.avg_risk_score ?? 0}`}
+                icon={<TrendingUp className="h-4 w-4" />}
+                color="text-yellow-500"
+              />
+            </div>
           </div>
 
-          {/* Charts row */}
+          {/* ── Step 3: Priority Alert Queue ────────────────────────────────── */}
+          {priorityAlerts && (priorityAlerts.alerts ?? []).length > 0 && (
+            <Card className="border-red-500/20">
+              <CardHeader className="pb-3 bg-red-500/5 border-b border-red-500/10">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <Bell className="h-4 w-4 text-red-500" />
+                    <CardTitle className="text-base text-red-500">Priority Alert Queue</CardTitle>
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 border border-red-500/30 text-red-500 bg-red-500/5">
+                      Top {priorityAlerts.budget_pct}% · {formatNumber(priorityAlerts.alert_count)} alerts
+                    </Badge>
+                  </div>
+                  <span className="text-[10px] text-muted-foreground">
+                    Ranked by final risk score (ML + behavioral evidence) · no ground-truth labels used
+                  </span>
+                </div>
+                <CardDescription className="text-xs mt-1">
+                  Highest-risk {priorityAlerts.budget_pct}% of all scored events. Click an entity to open the Identity Inspector.
+                </CardDescription>
+              </CardHeader>
+              <div className="w-full overflow-auto border-t border-border/50">
+                <table className="w-full text-sm text-left">
+                  <thead className="text-xs text-muted-foreground bg-muted/20 uppercase font-mono tracking-wider border-b border-border/50">
+                    <tr>
+                      <th className="px-3 py-3 font-medium">Timestamp</th>
+                      <th className="px-3 py-3 font-medium">Entity</th>
+                      <th className="px-3 py-3 font-medium">Risk Score</th>
+                      <th className="px-3 py-3 font-medium">Evidence</th>
+                      <th className="px-3 py-3 font-medium">Primary Reason</th>
+                      <th className="px-3 py-3 font-medium">Resource / Location</th>
+                      <th className="px-3 py-3 font-medium"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/50 font-mono text-xs">
+                    {(priorityAlerts.alerts ?? []).slice(0, 50).map((alert: PriorityAlert) => (
+                      <tr key={alert.event_id} className="hover:bg-muted/10 transition-colors">
+                        <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">
+                          {formatDate(alert.timestamp)}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <div className="flex items-center gap-1.5">
+                            <EntityIcon type={alert.entity_type} />
+                            <span className="text-foreground">{alert.entity_id}</span>
+                          </div>
+                          <span className="text-muted-foreground text-[10px]">
+                            {alert.entity_type.replace("_", " ")}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <div className="flex flex-col gap-1">
+                            <span className={cn("font-bold text-sm", riskColor(alert.risk_level))}>
+                              {alert.risk_score}
+                            </span>
+                            <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0 border w-fit", riskBg(alert.risk_level))}>
+                              {alert.risk_level}
+                            </Badge>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-foreground">{alert.evidence_count} signal{alert.evidence_count !== 1 ? "s" : ""}</span>
+                            <span className="text-muted-foreground text-[10px]">
+                              beh: {alert.behavioral_deviation_score} · ml: {alert.ml_score_norm}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2.5 max-w-[200px]">
+                          <span className="text-muted-foreground truncate block" title={alert.primary_reason}>
+                            {alert.primary_reason}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-foreground max-w-[160px] truncate" title={alert.resource_accessed}>
+                              {alert.resource_accessed}
+                            </span>
+                            <span className="text-muted-foreground text-[10px]">{alert.geo_location}</span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <button
+                            onClick={() => setLocation(`/identity/${alert.entity_id}`)}
+                            className="text-primary hover:underline text-[10px] whitespace-nowrap"
+                          >
+                            View →
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {(priorityAlerts.alerts ?? []).length > 50 && (
+                  <div className="px-4 py-2 border-t border-border/50 text-xs text-muted-foreground text-center">
+                    Showing 50 of {formatNumber(priorityAlerts.alert_count)} priority alerts — use Model Performance for full budget analysis.
+                  </div>
+                )}
+              </div>
+            </Card>
+          )}
+
+          {/* ── Charts row ──────────────────────────────────────────────────── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Risk level distribution */}
             <Card>
@@ -197,9 +349,7 @@ export function SocOverview() {
                         outerRadius={80}
                         paddingAngle={3}
                         dataKey="value"
-                        label={({ name, percent }) =>
-                          `${name} ${(percent * 100).toFixed(0)}%`
-                        }
+                        label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
                         labelLine={false}
                       >
                         {pieData.map((entry) => (
@@ -247,7 +397,7 @@ export function SocOverview() {
             </Card>
           </div>
 
-          {/* Bottom row */}
+          {/* ── Bottom row ──────────────────────────────────────────────────── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Top risk identities */}
             <Card>
@@ -306,7 +456,7 @@ export function SocOverview() {
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart
                       data={(topIds?.identities ?? []).slice(0, 8).map((id) => ({
-                        id: id.entity_id.replace("_", " "),
+                        id:    id.entity_id.replace("_", " "),
                         score: Math.round(id.avg_risk_score),
                         level: id.max_risk_level,
                       }))}
@@ -333,7 +483,7 @@ export function SocOverview() {
             </Card>
           </div>
 
-          {/* Recent High-Risk Events table */}
+          {/* ── Recent High-Risk Events table ────────────────────────────────── */}
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base">Recent High-Risk Events</CardTitle>
@@ -413,7 +563,9 @@ export function SocOverview() {
 
       {loading && (
         <div className="space-y-4 animate-pulse">
+          <div className="grid grid-cols-3 gap-4">{[...Array(3)].map((_, i) => <div key={i} className="h-24 bg-muted/30 rounded-lg border border-border/50" />)}</div>
           <div className="grid grid-cols-4 gap-4">{[...Array(4)].map((_, i) => <div key={i} className="h-24 bg-muted/30 rounded-lg border border-border/50" />)}</div>
+          <div className="h-64 bg-muted/30 rounded-lg border border-border/50" />
           <div className="grid grid-cols-2 gap-4">{[...Array(2)].map((_, i) => <div key={i} className="h-52 bg-muted/30 rounded-lg border border-border/50" />)}</div>
           <div className="h-64 bg-muted/30 rounded-lg border border-border/50" />
         </div>
@@ -423,8 +575,8 @@ export function SocOverview() {
 }
 
 function StatCard({
-  label, value, icon, color,
-}: { label: string; value: string; icon: React.ReactNode; color: string }) {
+  label, value, subtitle, icon, color,
+}: { label: string; value: string; subtitle?: string; icon: React.ReactNode; color: string }) {
   return (
     <Card>
       <CardContent className="pt-4 pb-4">
@@ -433,6 +585,7 @@ function StatCard({
           <span className={cn("opacity-70", color)}>{icon}</span>
         </div>
         <p className={cn("text-3xl font-mono font-bold", color)}>{value}</p>
+        {subtitle && <p className="text-[11px] text-muted-foreground mt-1 leading-snug">{subtitle}</p>}
       </CardContent>
     </Card>
   );

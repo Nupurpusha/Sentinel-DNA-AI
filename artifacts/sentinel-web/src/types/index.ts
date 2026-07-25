@@ -94,6 +94,9 @@ export interface ScoredEvent {
   label: string;
   // ML fields
   anomaly_score: number;
+  ml_score_norm?: number;
+  behavioral_deviation_score?: number;
+  evidence_count?: number;
   risk_score: number;
   predicted_anomaly: number;
   risk_level: 'Low' | 'Medium' | 'High' | 'Critical';
@@ -124,6 +127,7 @@ export interface DetectionSummary {
 export interface DetectionStatus {
   has_results: boolean;
   scored_events: number;
+  label_leakage_test_passed?: boolean;
 }
 
 export interface RiskTrendDay {
@@ -160,6 +164,8 @@ export interface IdentityRisk {
   risk_level?: string;
   detected_anomalies?: number;
   total_events?: number;
+  avg_behavioral_deviation?: number;
+  avg_evidence_count?: number;
   recent_anomalies?: ScoredEvent[];
 }
 
@@ -175,5 +181,79 @@ export interface ModelMetrics {
   roc_auc?: number | null;
   total_true_anomalies?: number;
   total_predicted_anomalies?: number;
+  note?: string;
+}
+
+// ─── Step 3: SOC Alert Budget & Priority Alert types ──────────────────────────
+
+export interface PriorityAlert {
+  event_id: string;
+  entity_id: string;
+  entity_type: string;
+  timestamp: string;
+  risk_score: number;
+  risk_level: 'Low' | 'Medium' | 'High' | 'Critical';
+  ml_score_norm: number;
+  behavioral_deviation_score: number;
+  evidence_count: number;
+  primary_reason: string;
+  reasons: string[];
+  resource_accessed: string;
+  geo_location: string;
+  label: string;
+}
+
+export interface PriorityAlertsResponse {
+  alerts: PriorityAlert[];
+  total_events: number;
+  alert_count: number;
+  budget_pct: number;
+}
+
+export interface AlertBudgetRow {
+  budget_pct: number;
+  alert_count: number;
+  true_positives: number;
+  false_positives: number;
+  false_negatives: number;
+  precision: number;
+  recall: number;
+  f1_score: number;
+}
+
+export interface AlertBudgetResponse {
+  has_results: boolean;
+  total_events?: number;
+  total_attacks?: number;
+  budgets?: AlertBudgetRow[];
+  note?: string;
+}
+
+export interface AttackCoverageRow {
+  attack_type: string;
+  total_gt: number;
+  captured_top1: number;
+  coverage_pct: number;
+}
+
+export interface AttackCoverageResponse {
+  has_results: boolean;
+  total_events?: number;
+  alert_count?: number;
+  budget_pct?: number;
+  coverage?: AttackCoverageRow[];
+  note?: string;
+}
+
+export interface Top1Metrics {
+  has_results: boolean;
+  alert_count?: number;
+  total_events?: number;
+  total_attacks?: number;
+  true_positives?: number;
+  false_positives?: number;
+  precision?: number;
+  recall?: number;
+  f1_score?: number;
   note?: string;
 }
