@@ -1,0 +1,89 @@
+STEP 5 — Demo Readiness & Analyst Investigation Flow
+
+SentinelDNA Steps 1–3 are complete and working.
+Step 4 temporal experiments exist but MUST NOT be integrated into risk ranking because they have not demonstrated sufficient separation.
+
+This is a SMALL frontend/backend integration task.
+
+DO NOT:
+- change ML models
+- change risk scoring
+- change alert ranking
+- change dataset generation
+- change Step 3 metrics
+- add external APIs
+- redesign the application
+
+GOAL:
+Make the existing Top-1% Priority Alert Queue demonstrate a complete SOC investigation workflow.
+
+1. ALERT DETAILS
+
+When a Priority Alert is clicked, provide a clear investigation view using EXISTING data.
+
+Show:
+- entity ID/type
+- timestamp
+- risk score and level
+- ML anomaly score
+- behavioral deviation score
+- evidence count
+- resource
+- location
+- device
+- authentication result
+- behavioral reasons
+
+2. WHY FLAGGED
+
+Add a compact "Why SentinelDNA Flagged This" section.
+
+Display the existing behavioral explanations clearly.
+
+Do NOT generate explanations from attack labels.
+
+3. BEHAVIORAL DNA COMPARISON
+
+For the selected alert show:
+
+EXPECTED BEHAVIOR
+vs
+OBSERVED BEHAVIOR
+
+Using existing identity profile/event data.
+
+Examples:
+Normal location → observed location
+Known devices → observed device
+Normal hours → observed hour
+Common resources → observed resource
+Preferred authentication → observed authentication
+
+Highlight only genuine deviations.
+
+4. ANALYST ACTION
+
+Add a simple analyst disposition control:
+
+- Investigate
+- Escalate
+- Benign
+
+This is a demo/local workflow only.
+
+Do not retrain the model from analyst selections.
+
+5. Preserve all existing pages and functionality.
+
+Do not integrate Step 4 temporal scores into production ranking.
+
+Test the investigation flow end-to-end.
+
+Then STOP.
+
+Report:
+1. Files modified
+2. Investigation functionality added
+3. How Expected vs Observed is calculated
+4. Confirmation explanations do not use labels
+5. Confirmation Steps 1–3 and existing metrics remain unchanged

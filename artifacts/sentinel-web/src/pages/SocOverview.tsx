@@ -5,6 +5,7 @@ import {
   TopIdentitiesResponse, RiskTrendResponse, ScoredEvent,
   PriorityAlertsResponse, PriorityAlert, Top1Metrics,
 } from "@/types";
+import { AlertInvestigationDialog, AnalystDisposition } from "@/components/AlertInvestigationDialog";
 import { formatNumber, formatDate, cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -64,6 +65,8 @@ export function SocOverview() {
   const [top1Metrics, setTop1Metrics]       = useState<Top1Metrics | null>(null);
   const [loading, setLoading]       = useState(true);
   const [running, setRunning]       = useState(false);
+  const [selectedAlert, setSelectedAlert] = useState<PriorityAlert | null>(null);
+  const [dispositions, setDispositions] = useState<Record<string, AnalystDisposition>>({});
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -263,7 +266,12 @@ export function SocOverview() {
                   </thead>
                   <tbody className="divide-y divide-border/50 font-mono text-xs">
                     {(priorityAlerts.alerts ?? []).slice(0, 50).map((alert: PriorityAlert) => (
-                      <tr key={alert.event_id} className="hover:bg-muted/10 transition-colors">
+                      <tr
+                        key={alert.event_id}
+                        className="cursor-pointer hover:bg-muted/10 transition-colors"
+                        onClick={() => setSelectedAlert(alert)}
+                        data-testid={`priority-alert-${alert.event_id}`}
+                      >
                         <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">
                           {formatDate(alert.timestamp)}
                         </td>
@@ -309,10 +317,15 @@ export function SocOverview() {
                         </td>
                         <td className="px-3 py-2.5">
                           <button
-                            onClick={() => setLocation(`/identity/${alert.entity_id}`)}
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setSelectedAlert(alert);
+                            }}
                             className="text-primary hover:underline text-[10px] whitespace-nowrap"
+                            data-testid={`investigate-alert-${alert.event_id}`}
                           >
-                            View →
+                            Investigate →
                           </button>
                         </td>
                       </tr>
@@ -570,6 +583,20 @@ export function SocOverview() {
           <div className="h-64 bg-muted/30 rounded-lg border border-border/50" />
         </div>
       )}
+
+      <AlertInvestigationDialog
+        alert={selectedAlert}
+        disposition={selectedAlert ? dispositions[selectedAlert.event_id] : undefined}
+        onDispositionChange={(disposition) => {
+          if (selectedAlert) {
+            setDispositions((current) => ({
+              ...current,
+              [selectedAlert.event_id]: disposition,
+            }));
+          }
+        }}
+        onClose={() => setSelectedAlert(null)}
+      />
     </div>
   );
 }
