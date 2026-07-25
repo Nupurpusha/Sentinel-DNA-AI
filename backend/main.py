@@ -10,12 +10,16 @@ import sqlite3
 from contextlib import asynccontextmanager
 from typing import Optional
 
+import numpy as np
+from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix, roc_auc_score
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from database import DB_PATH, drop_all, get_connection, init_db
 from generator import generate_dataset
+from detector import run_detection
+from detection_routes import router as detection_router
 
 # ─── Lifespan: initialise DB and seed if empty ──────────────────────────────
 
@@ -34,6 +38,9 @@ async def lifespan(app: FastAPI):
         _do_generate()
     else:
         print(f"Database already contains {event_count} events — skipping generation.")
+
+    # Step 2: run detection if not already done
+    run_detection(force=False)
     yield
 
 
@@ -53,6 +60,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(detection_router)
 
 
 # ─── Internal helper ──────────────────────────────────────────────────────────
@@ -309,6 +318,8 @@ def regenerate():
             count = conn.execute("SELECT COUNT(*) AS n FROM events").fetchone()["n"]
         finally:
             conn.close()
+        # Re-run detection on fresh data
+        run_detection(force=True)
         return {"success": True, "total_events": count, "message": f"Dataset regenerated with {count} events."}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))

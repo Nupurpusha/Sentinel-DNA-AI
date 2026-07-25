@@ -6,6 +6,8 @@ import { Route, Switch, Router as WouterRouter } from 'wouter';
 import { Navbar } from '@/components/layout/Navbar';
 import { DataFoundation } from '@/pages/DataFoundation';
 import { IdentityInspector } from '@/pages/IdentityInspector';
+import { SocOverview } from '@/pages/SocOverview';
+import { ModelPerformance } from '@/pages/ModelPerformance';
 
 const queryClient = new QueryClient();
 
@@ -18,6 +20,8 @@ function Router() {
           <Route path="/" component={DataFoundation} />
           <Route path="/identity" component={IdentityInspector} />
           <Route path="/identity/:entityId" component={IdentityInspector} />
+          <Route path="/soc" component={SocOverview} />
+          <Route path="/model" component={ModelPerformance} />
           <Route component={NotFound} />
         </Switch>
       </main>

@@ -1,0 +1,308 @@
+Continue the existing SentinelDNA project with STEP 2.
+
+IMPORTANT:
+Step 1 is already complete and working correctly. Do NOT rebuild, replace, simplify, or redesign the existing application.
+
+The following existing Step 1 functionality MUST remain intact:
+- React + TypeScript frontend
+- Python FastAPI backend
+- SQLite database
+- Existing synthetic dataset (~50,000+ events across 300 identities)
+- Data Foundation page
+- Identity Inspector page
+- Existing search and filters
+- Export CSV
+- Regenerate Dataset
+- Existing API endpoints
+- Existing UI styling and navigation
+
+Before implementing Step 2, inspect the current repository and understand the existing database schema, generator, APIs, frontend structure, and behavioral profile fields.
+
+==================================================
+STEP 2 — ML-BASED BEHAVIORAL ANOMALY DETECTION
+==================================================
+
+The goal of Step 2 is to transform SentinelDNA from a synthetic telemetry viewer into an actual behavioral anomaly detection system.
+
+The system must LEARN what is normal for each identity from behavioral data and detect deviations WITHOUT using the ground-truth label to calculate anomaly scores.
+
+CRITICAL DATA-LEAKAGE RULE:
+
+The existing `label` field (normal, brute_force, impossible_travel, credential_stuffing, lateral_movement, device_spoofing, low_slow_exfiltration, insider_drift, etc.) is GROUND TRUTH ONLY.
+
+NEVER use `label` as:
+- an ML feature
+- an input to anomaly scoring
+- an input to risk scoring
+- a rule for deciding whether an event is anomalous
+
+The model must infer abnormal behavior independently.
+
+The label may ONLY be used AFTER scoring for evaluation of model performance.
+
+==================================================
+1. FEATURE ENGINEERING
+==================================================
+
+Build behavioral features from the existing event data.
+
+Include useful features such as:
+
+- hour of day
+- deviation from identity's normal active hours
+- session duration
+- deviation from identity's normal session duration
+- authentication success/failure
+- authentication method familiarity
+- known vs unknown device
+- resource familiarity
+- location familiarity
+- IP/subnet familiarity
+- frequency of recent events
+- failed authentication frequency
+- resource access frequency
+- device novelty
+- location novelty
+- behavioral deviation from the identity's historical baseline
+
+Use the existing fields wherever available.
+
+Handle user, service_account, and edge_device identities appropriately.
+
+Do NOT fabricate fields that do not exist unless they can be legitimately derived from existing data.
+
+==================================================
+2. BEHAVIORAL BASELINE LEARNING
+==================================================
+
+Learn behavioral baselines from historical events.
+
+Where possible, calculate identity-specific baselines for:
+
+- normal login/access hours
+- normal locations
+- known devices
+- common resources
+- preferred authentication methods
+- normal session duration
+- usual IP/subnet behavior
+- normal access frequency
+
+The model should detect deviation from an identity's own historical behavior, not simply compare every identity against one global average.
+
+==================================================
+3. UNSUPERVISED ML ANOMALY DETECTION
+==================================================
+
+Implement an unsupervised anomaly detection model.
+
+Isolation Forest is preferred unless inspection of the existing architecture shows that another lightweight unsupervised method is more appropriate.
+
+Train the detector WITHOUT using the `label` column.
+
+For every event generate at minimum:
+
+- anomaly_score
+- risk_score (0–100)
+- predicted_anomaly (true/false)
+- risk_level (Low / Medium / High / Critical)
+
+Persist or cache the trained model appropriately so the application does NOT retrain unnecessarily on every API request.
+
+Make the implementation reproducible by using a fixed random seed where appropriate.
+
+==================================================
+4. EXPLAINABLE RISK SCORING
+==================================================
+
+A SOC analyst must be able to understand WHY an event received a high risk score.
+
+Generate human-readable behavioral reasons such as:
+
+- Access outside normal hours
+- Unknown device
+- Unusual location
+- Unfamiliar resource
+- Abnormally long session
+- Authentication failures increased
+- Unusual authentication method
+- New IP/subnet
+- Abnormal access frequency
+
+These explanations MUST be derived from actual behavioral deviations.
+
+Do NOT derive explanations from the ground-truth label.
+
+==================================================
+5. MODEL EVALUATION
+==================================================
+
+After predictions have been generated, use the existing ground-truth `label` ONLY for evaluation.
+
+Calculate useful metrics such as:
+
+- Precision
+- Recall
+- F1 score
+- confusion matrix counts
+- number of true anomalies detected
+- number of false positives
+- number of missed anomalies
+
+If technically appropriate, also provide ROC-AUC or PR-AUC.
+
+Again: ground-truth labels must never participate in training or scoring.
+
+==================================================
+6. STEP 2 API
+==================================================
+
+Extend the existing FastAPI backend cleanly.
+
+Add endpoints as appropriate for:
+
+- model/detection summary
+- scored events
+- high-risk events
+- model evaluation metrics
+- identity-level risk information
+- individual event explanation
+
+Do NOT break or rename existing Step 1 endpoints.
+
+==================================================
+7. SOC OVERVIEW PAGE
+==================================================
+
+Add a new main navigation page:
+
+SOC Overview
+
+Keep the existing SentinelDNA dark cybersecurity design.
+
+The page should provide an analyst-friendly overview including:
+
+- Total Scored Events
+- Detected Anomalies
+- High/Critical Risk Events
+- Average Risk Score
+
+Also show useful visual summaries such as:
+
+- Risk Level Distribution
+- Anomaly/Risk trend over time
+- Highest-risk identities
+- Recent High-Risk Events
+
+For recent high-risk events show useful fields such as:
+
+Timestamp
+Entity ID
+Entity Type
+Risk Score
+Risk Level
+Resource
+Location
+Primary behavioral reason
+
+Clicking an entity should allow navigation to its Identity Inspector.
+
+==================================================
+8. UPDATE IDENTITY INSPECTOR
+==================================================
+
+Preserve everything currently displayed in Identity Inspector.
+
+Enhance it with ML-derived information such as:
+
+- Identity Risk Score
+- Risk Level
+- number of detected anomalous events
+- recent behavioral deviations
+
+For individual suspicious events show WHY the model considered the behavior unusual.
+
+Do NOT remove the existing baseline profile or event history.
+
+==================================================
+9. MODEL PERFORMANCE SECTION
+==================================================
+
+Add a Model Performance section/page for demonstration and evaluation.
+
+Display:
+
+- Precision
+- Recall
+- F1 Score
+- True Positives
+- False Positives
+- False Negatives
+
+Clearly state in the UI that ground-truth attack labels are used ONLY for offline evaluation and are NOT model inputs.
+
+==================================================
+10. DEPENDENCIES AND REPLIT STARTUP
+==================================================
+
+Any new Python or JavaScript dependencies must be added to the project's existing dependency configuration.
+
+Ensure the project can start normally in Replit without requiring me to manually run pip install or manually install frontend packages every time.
+
+Do not unnecessarily replace the current package/dependency system.
+
+==================================================
+11. TESTING AND REGRESSION CHECK
+==================================================
+
+After implementation:
+
+1. Start the backend.
+2. Start the frontend.
+3. Verify Data Foundation still works.
+4. Verify Identity Inspector still works.
+5. Verify existing filters/search work.
+6. Verify Export CSV still works.
+7. Verify Regenerate Dataset still works.
+8. Verify existing Step 1 APIs still work.
+9. Verify the ML model trains/loads successfully.
+10. Verify scored events are returned.
+11. Verify SOC Overview loads.
+12. Verify Model Performance metrics load.
+13. Verify risk explanations are displayed.
+14. Verify there are no obvious frontend console or backend errors.
+
+Do not mark the task complete until these checks pass.
+
+==================================================
+IMPORTANT IMPLEMENTATION CONSTRAINTS
+==================================================
+
+- Preserve Step 1.
+- Do not regenerate or replace the existing dataset merely to make the ML model easier to implement.
+- Do not hard-code anomaly results.
+- Do not fake model metrics.
+- Do not use ground-truth labels for prediction.
+- Do not use attack names to determine risk scores.
+- Do not create random risk scores.
+- Risk scores must come from actual model/behavioral deviation results.
+- Keep the implementation understandable and suitable for a university cybersecurity/AI project.
+- Prefer a clean, modular implementation over unnecessary complexity.
+- Do not introduce paid external APIs or services.
+- Keep the application fully runnable on Replit.
+
+Before changing code, inspect the existing implementation and make a short implementation plan.
+
+Then implement Step 2 incrementally.
+
+When finished, report:
+1. Files created
+2. Files modified
+3. ML features used
+4. Model used
+5. How risk score is calculated
+6. How behavioral explanations are generated
+7. Evaluation results
+8. API endpoints added
+9. UI components/pages added
+10. Confirmation that Step 1 regression checks passed
