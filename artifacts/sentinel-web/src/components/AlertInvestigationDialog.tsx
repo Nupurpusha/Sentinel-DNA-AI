@@ -32,6 +32,9 @@ interface IdentityPayload {
     profile: IdentityProfile;
   };
   events: EventRow[];
+  history_event_count?: number;
+  baseline_status?: "Established" | "Cold Start";
+  minimum_history_events?: number;
 }
 
 interface AlertInvestigationDialogProps {
@@ -136,12 +139,18 @@ export function AlertInvestigationDialog({
 }: AlertInvestigationDialogProps) {
   const [event, setEvent] = useState<EventRow | null>(null);
   const [profile, setProfile] = useState<IdentityProfile | null>(null);
+  const [baselineStatus, setBaselineStatus] = useState<"Established" | "Cold Start" | null>(null);
+  const [historyEventCount, setHistoryEventCount] = useState<number | null>(null);
+  const [minimumHistoryEvents, setMinimumHistoryEvents] = useState(50);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!alert) {
       setEvent(null);
       setProfile(null);
+      setBaselineStatus(null);
+      setHistoryEventCount(null);
+      setMinimumHistoryEvents(50);
       return;
     }
 
@@ -149,6 +158,9 @@ export function AlertInvestigationDialog({
     setLoading(true);
     setEvent(null);
     setProfile(null);
+    setBaselineStatus(null);
+    setHistoryEventCount(null);
+    setMinimumHistoryEvents(50);
 
     fetch(`/sentinel-api/identities/${alert.entity_id}`)
       .then((response) => {
@@ -159,6 +171,12 @@ export function AlertInvestigationDialog({
         if (cancelled) return;
         setProfile(payload.identity.profile);
         setEvent(payload.events.find((candidate) => candidate.event_id === alert.event_id) ?? null);
+        const count = payload.history_event_count ?? payload.events.length;
+        setBaselineStatus(
+          payload.baseline_status ?? (count >= (payload.minimum_history_events ?? 50) ? "Established" : "Cold Start"),
+        );
+        setHistoryEventCount(count);
+        setMinimumHistoryEvents(payload.minimum_history_events ?? 50);
       })
       .catch((error) => {
         if (!cancelled) console.error(error);
@@ -176,7 +194,10 @@ export function AlertInvestigationDialog({
     () => (profile && event ? comparisonRows(profile, event) : []),
     [profile, event],
   );
-  const deviations = comparisons.filter((comparison) => comparison.deviates);
+  const baselineEstablished = baselineStatus === "Established";
+  const deviations = baselineEstablished
+    ? comparisons.filter((comparison) => comparison.deviates)
+    : [];
   const reasons = alert?.reasons ?? [];
 
   return (
@@ -257,10 +278,20 @@ export function AlertInvestigationDialog({
                   </div>
                   {event && (
                     <Badge variant="outline" className="text-[10px]">
-                      {deviations.length} genuine deviation{deviations.length === 1 ? "" : "s"}
+                      {baselineEstablished
+                        ? `${deviations.length} genuine deviation${deviations.length === 1 ? "" : "s"}`
+                        : "Baseline not established"}
                     </Badge>
                   )}
                 </div>
+
+                {baselineStatus === "Cold Start" && (
+                  <div className="mb-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-4 py-3 text-xs text-yellow-200">
+                    <strong>Cold Start:</strong> only {historyEventCount ?? 0} historical events are available.
+                    Expected vs Observed values are shown for context, but deviations are not considered reliable
+                    until {minimumHistoryEvents} events are available.
+                  </div>
+                )}
 
                 {loading ? (
                   <div className="flex items-center justify-center rounded-lg border border-border/60 py-10 text-sm text-muted-foreground">
@@ -280,13 +311,17 @@ export function AlertInvestigationDialog({
                           key={comparison.label}
                           className={cn(
                             "grid grid-cols-[1fr_1.2fr_1.2fr] px-4 py-3 text-xs",
-                            comparison.deviates && "bg-orange-500/5",
+                            baselineEstablished && comparison.deviates && "bg-orange-500/5",
                           )}
                         >
                           <span className="font-medium text-foreground">{comparison.label}</span>
                           <span className="text-muted-foreground">{comparison.expected}</span>
-                          <span className={cn(comparison.deviates ? "font-medium text-orange-300" : "text-foreground/80")}>
-                            {comparison.deviates && <AlertTriangle className="mr-1 inline h-3 w-3" />}
+                          <span className={cn(
+                            baselineEstablished && comparison.deviates
+                              ? "font-medium text-orange-300"
+                              : "text-foreground/80",
+                          )}>
+                            {baselineEstablished && comparison.deviates && <AlertTriangle className="mr-1 inline h-3 w-3" />}
                             {comparison.observed}
                           </span>
                         </div>

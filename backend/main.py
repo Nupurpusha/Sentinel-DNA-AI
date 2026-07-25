@@ -20,6 +20,7 @@ from database import DB_PATH, drop_all, get_connection, init_db
 from generator import generate_dataset
 from detector import run_detection
 from detection_routes import router as detection_router
+from baseline import MINIMUM_HISTORY_EVENTS, baseline_status
 
 # ─── Lifespan: initialise DB and seed if empty ──────────────────────────────
 
@@ -296,10 +297,14 @@ def get_identity(entity_id: str):
             (entity_id,),
         ).fetchall()
         events = [_row_to_dict(r) for r in events_rows]
+        history_event_count = len(events)
 
         return {
             "identity": ident,
             "event_count": len(events),
+            "history_event_count": history_event_count,
+            "baseline_status": baseline_status(history_event_count),
+            "minimum_history_events": MINIMUM_HISTORY_EVENTS,
             "events": events,
         }
     finally:

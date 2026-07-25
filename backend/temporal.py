@@ -14,6 +14,7 @@ from datetime import datetime
 from statistics import mean
 from typing import Any
 
+from baseline import MINIMUM_HISTORY_EVENTS, baseline_status
 
 ROLLING_WINDOW_SIZES = (10, 25, 50)
 SEGMENT_SIZE = 10
@@ -301,7 +302,24 @@ def calculate_temporal_drift(conn, entity_id: str) -> dict[str, Any] | None:
         (entity_id,),
     ).fetchall()
     events = [dict(row) for row in rows]
+    history_event_count = len(events)
     profile = json.loads(identity["profile"])
+    if history_event_count < MINIMUM_HISTORY_EVENTS:
+        return {
+            "entity_id": entity_id,
+            "baseline_status": baseline_status(history_event_count),
+            "history_event_count": history_event_count,
+            "minimum_history_events": MINIMUM_HISTORY_EVENTS,
+            "temporal_drift_score": 0,
+            "temporal_status": "Stable",
+            "temporal_reasons": [],
+            "temporal_signals": {},
+            "temporal_scoring_reliable": False,
+            "recent_event_count": history_event_count,
+            "historical_event_count": 0,
+            "rolling_window_sizes": list(ROLLING_WINDOW_SIZES),
+        }
+
     signals = {
         name: _rolling_signal(events, profile, name)
         for name in SIGNAL_CALCULATORS
@@ -323,10 +341,14 @@ def calculate_temporal_drift(conn, entity_id: str) -> dict[str, Any] | None:
 
     return {
         "entity_id": entity_id,
+        "baseline_status": baseline_status(history_event_count),
+        "history_event_count": history_event_count,
+        "minimum_history_events": MINIMUM_HISTORY_EVENTS,
         "temporal_drift_score": score,
         "temporal_status": _status(score),
         "temporal_reasons": reasons,
         "temporal_signals": signals,
+        "temporal_scoring_reliable": True,
         "recent_event_count": min(len(events), max(ROLLING_WINDOW_SIZES)),
         "historical_event_count": max(0, len(events) - max(ROLLING_WINDOW_SIZES)),
         "rolling_window_sizes": list(ROLLING_WINDOW_SIZES),

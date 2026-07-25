@@ -196,6 +196,22 @@ export function IdentityInspector() {
                         </>
                       )}
                     </CardDescription>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "text-[10px]",
+                          data.baseline_status === "Cold Start"
+                            ? "border-yellow-500/30 bg-yellow-500/10 text-yellow-400"
+                            : "border-emerald-500/30 bg-emerald-500/10 text-emerald-400",
+                        )}
+                      >
+                        {data.baseline_status ?? "Established"} baseline
+                      </Badge>
+                      <span className="text-[10px] text-muted-foreground">
+                        {data.history_event_count ?? data.event_count} historical events
+                      </span>
+                    </div>
                   </div>
                 </div>
 
@@ -241,6 +257,14 @@ export function IdentityInspector() {
                 </div>
               </div>
             </CardHeader>
+            {data.baseline_status === "Cold Start" && (
+              <div className="border-b border-yellow-500/20 bg-yellow-500/5 px-6 py-3 text-xs text-yellow-200">
+                <strong>Cold Start:</strong> this identity has only{" "}
+                {data.history_event_count ?? data.event_count} historical events.
+                Behavioral deviations are not considered reliable until{" "}
+                {data.minimum_history_events ?? 50} events are available.
+              </div>
+            )}
 
             <CardContent className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 p-6">
               <div className="space-y-4">

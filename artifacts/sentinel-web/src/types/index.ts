@@ -62,6 +62,9 @@ export interface Identity {
 export interface IdentityResponse {
   identity: Identity;
   event_count: number;
+  history_event_count?: number;
+  baseline_status?: 'Established' | 'Cold Start';
+  minimum_history_events?: number;
   events: EventRow[];
 }
 
