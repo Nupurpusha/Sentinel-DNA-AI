@@ -12,6 +12,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { PriorityAlert, EventRow, IdentityProfile } from "@/types";
+import { Tag } from "lucide-react";
 import { formatDate, cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -269,6 +270,46 @@ export function AlertInvestigationDialog({
                   <p className="text-sm text-muted-foreground">No behavioral explanation was recorded for this alert.</p>
                 )}
               </section>
+
+              {/* ── Step 6: Anomaly-Type Classification ───────────────────────── */}
+              {alert.predicted_anomaly_type && alert.predicted_anomaly_type !== "normal_activity" && (
+                <section className="rounded-lg border border-violet-500/25 bg-violet-500/5 p-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <Tag className="h-4 w-4 text-violet-400" />
+                    <h3 className="text-sm font-semibold text-violet-300">Predicted Anomaly Type</h3>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3 mb-3">
+                    <span className="rounded-md border border-violet-500/40 bg-violet-500/10 px-3 py-1.5 font-mono text-sm font-semibold text-violet-300">
+                      {alert.predicted_anomaly_type}
+                    </span>
+                    {alert.classification_confidence != null && (
+                      <span className="text-xs text-muted-foreground">
+                        Confidence:{" "}
+                        <span className={cn(
+                          "font-mono font-semibold",
+                          alert.classification_confidence >= 0.7 ? "text-emerald-400" :
+                          alert.classification_confidence >= 0.4 ? "text-yellow-400" : "text-orange-400"
+                        )}>
+                          {(alert.classification_confidence * 100).toFixed(0)}%
+                        </span>
+                      </span>
+                    )}
+                    <span className="text-[10px] text-muted-foreground/60 italic">
+                      Rule-based — labels never used as input
+                    </span>
+                  </div>
+                  {(alert.classification_reasons ?? []).length > 0 && (
+                    <ul className="grid gap-1.5 md:grid-cols-2">
+                      {(alert.classification_reasons ?? []).map((reason) => (
+                        <li key={reason} className="flex items-start gap-2 text-xs text-foreground/80">
+                          <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-400" />
+                          {reason}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+              )}
 
               <section>
                 <div className="mb-3 flex items-center justify-between gap-2">

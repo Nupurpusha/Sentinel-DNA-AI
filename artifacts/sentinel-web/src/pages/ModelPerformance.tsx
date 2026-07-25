@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
-import { ModelMetrics, AlertBudgetResponse, AttackCoverageResponse, DetectionStatus } from "@/types";
+import { ModelMetrics, AlertBudgetResponse, AttackCoverageResponse, DetectionStatus, ClassificationMetrics } from "@/types";
 import { formatNumber, cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, ShieldCheck, AlertTriangle, Info, CheckCircle2, XCircle, Shield } from "lucide-react";
+import { RefreshCw, ShieldCheck, AlertTriangle, Info, CheckCircle2, XCircle, Shield, Tag, Workflow } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
 } from "recharts";
@@ -26,26 +26,29 @@ function MetricCard({
 }
 
 export function ModelPerformance() {
-  const [metrics, setMetrics]   = useState<ModelMetrics | null>(null);
-  const [budget, setBudget]     = useState<AlertBudgetResponse | null>(null);
-  const [coverage, setCoverage] = useState<AttackCoverageResponse | null>(null);
-  const [status, setStatus]     = useState<DetectionStatus | null>(null);
-  const [loading, setLoading]   = useState(true);
-  const [running, setRunning]   = useState(false);
+  const [metrics, setMetrics]             = useState<ModelMetrics | null>(null);
+  const [budget, setBudget]               = useState<AlertBudgetResponse | null>(null);
+  const [coverage, setCoverage]           = useState<AttackCoverageResponse | null>(null);
+  const [status, setStatus]               = useState<DetectionStatus | null>(null);
+  const [classMetrics, setClassMetrics]   = useState<ClassificationMetrics | null>(null);
+  const [loading, setLoading]             = useState(true);
+  const [running, setRunning]             = useState(false);
 
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [metricsRes, budgetRes, coverageRes, statusRes] = await Promise.all([
+      const [metricsRes, budgetRes, coverageRes, statusRes, classRes] = await Promise.all([
         fetch("/sentinel-api/detection/metrics"),
         fetch("/sentinel-api/detection/alert-budget"),
         fetch("/sentinel-api/detection/attack-coverage"),
         fetch("/sentinel-api/detection/status"),
+        fetch("/sentinel-api/detection/classification-metrics"),
       ]);
       if (metricsRes.ok)   setMetrics(await metricsRes.json());
       if (budgetRes.ok)    setBudget(await budgetRes.json());
       if (coverageRes.ok)  setCoverage(await coverageRes.json());
       if (statusRes.ok)    setStatus(await statusRes.json());
+      if (classRes.ok)     setClassMetrics(await classRes.json());
     } catch (err) {
       console.error(err);
     } finally {
@@ -69,6 +72,7 @@ export function ModelPerformance() {
 
   const hasResults = metrics?.has_results ?? false;
   const leakagePassed = status?.label_leakage_test_passed ?? false;
+  const clsLeakagePassed = classMetrics?.classifier_leakage_test_passed ?? false;
 
   const cmData = hasResults
     ? [
@@ -340,6 +344,107 @@ export function ModelPerformance() {
             </Card>
           )}
 
+          {/* ── Step 6: Anomaly-Type Classification Metrics ─────────────────── */}
+          {classMetrics?.has_results && classMetrics.per_type && (
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center gap-2">
+                  <Tag className="h-4 w-4 text-violet-400" />
+                  <CardTitle className="text-base">Anomaly-Type Classification Performance</CardTitle>
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 border border-violet-500/30 text-violet-400">
+                    Step 6
+                  </Badge>
+                  {clsLeakagePassed && (
+                    <div className="flex items-center gap-1 ml-auto">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                      <span className="text-xs text-emerald-500 font-semibold font-mono">Label-independent PASSED</span>
+                    </div>
+                  )}
+                </div>
+                <CardDescription className="text-xs mt-1">
+                  Rule-based classifier predicts attack type for priority alerts. Ground-truth labels used
+                  only post-hoc here for offline evaluation — never as classifier inputs.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* Overall summary */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="rounded-md border border-border/50 bg-muted/10 px-3 py-2.5">
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Overall Accuracy</p>
+                    <p className="text-2xl font-mono font-bold text-primary">
+                      {classMetrics.overall_accuracy != null ? `${(classMetrics.overall_accuracy * 100).toFixed(1)}%` : "—"}
+                    </p>
+                  </div>
+                  <div className="rounded-md border border-border/50 bg-muted/10 px-3 py-2.5">
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Unknown Rate</p>
+                    <p className="text-2xl font-mono font-bold text-yellow-500">
+                      {classMetrics.unknown_rate != null ? `${(classMetrics.unknown_rate * 100).toFixed(1)}%` : "—"}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">Events classified as unknown_anomaly</p>
+                  </div>
+                  <div className="rounded-md border border-border/50 bg-muted/10 px-3 py-2.5">
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Total Anomalous</p>
+                    <p className="text-2xl font-mono font-bold">
+                      {classMetrics.total_anomalous_events?.toLocaleString() ?? "—"}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">Events in classification scope</p>
+                  </div>
+                  {classMetrics.top1_pct_classification_accuracy != null && (
+                    <div className="rounded-md border border-border/50 bg-muted/10 px-3 py-2.5">
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Top-1% Class Acc</p>
+                      <p className="text-2xl font-mono font-bold text-emerald-500">
+                        {`${(classMetrics.top1_pct_classification_accuracy * 100).toFixed(1)}%`}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">Within priority alert budget</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Per-type table */}
+                <div className="overflow-auto">
+                  <table className="w-full text-sm text-left">
+                    <thead className="text-xs text-muted-foreground bg-muted/20 uppercase font-mono tracking-wider border-y border-border/50">
+                      <tr>
+                        <th className="px-4 py-3 font-medium">Attack Type</th>
+                        <th className="px-4 py-3 font-medium">Precision</th>
+                        <th className="px-4 py-3 font-medium">Recall</th>
+                        <th className="px-4 py-3 font-medium">F1</th>
+                        <th className="px-4 py-3 font-medium">Support</th>
+                        <th className="px-4 py-3 font-medium">TP / FP / FN</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/50 font-mono text-xs">
+                      {Object.entries(classMetrics.per_type).map(([type, m]) => {
+                        const f1Color = m.f1_score >= 0.6 ? "text-emerald-500" : m.f1_score >= 0.35 ? "text-yellow-500" : "text-orange-500";
+                        return (
+                          <tr key={type} className="hover:bg-muted/10 transition-colors">
+                            <td className="px-4 py-3">
+                              <code className="text-xs bg-muted/30 px-1.5 py-0.5 rounded">{type}</code>
+                            </td>
+                            <td className="px-4 py-3">{(m.precision * 100).toFixed(1)}%</td>
+                            <td className="px-4 py-3">{(m.recall * 100).toFixed(1)}%</td>
+                            <td className={cn("px-4 py-3 font-bold", f1Color)}>{(m.f1_score * 100).toFixed(1)}%</td>
+                            <td className="px-4 py-3 text-muted-foreground">{m.support.toLocaleString()}</td>
+                            <td className="px-4 py-3">
+                              <span className="text-emerald-500">{m.true_positives}</span>
+                              <span className="text-muted-foreground"> / </span>
+                              <span className="text-orange-500">{m.false_positives}</span>
+                              <span className="text-muted-foreground"> / </span>
+                              <span className="text-red-500">{m.false_negatives}</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {classMetrics.note && (
+                  <p className="text-[11px] text-muted-foreground border-t border-border/50 pt-3">{classMetrics.note}</p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           {/* ── Step 3: Detection Coverage by Attack Type ────────────────────── */}
           {coverage?.has_results && coverage.coverage && (
             <Card>
@@ -409,6 +514,57 @@ export function ModelPerformance() {
               </CardContent>
             </Card>
           )}
+
+          {/* ── Streaming / Production Readiness ────────────────────────────── */}
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center gap-2">
+                <Workflow className="h-4 w-4 text-muted-foreground" />
+                <CardTitle className="text-base">Pipeline Architecture &amp; Streaming Readiness</CardTitle>
+              </div>
+              <CardDescription className="text-xs mt-1">
+                Current prototype uses local/batch telemetry. The modular scoring pipeline is designed for streaming ingestion in production.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* Pipeline stages */}
+              <div className="flex flex-wrap items-center gap-1.5 text-xs font-mono">
+                {[
+                  "Telemetry",
+                  "Identity Baseline",
+                  "Feature Extraction",
+                  "Isolation Forest",
+                  "Behavioral Evidence",
+                  "Risk Ranking",
+                  "Anomaly Classification",
+                  "SOC Investigation",
+                ].map((stage, i, arr) => (
+                  <div key={stage} className="flex items-center gap-1.5">
+                    <span className="rounded border border-border/60 bg-muted/20 px-2 py-1 text-foreground/80 whitespace-nowrap">
+                      {stage}
+                    </span>
+                    {i < arr.length - 1 && (
+                      <span className="text-muted-foreground/50 text-base font-light">→</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="rounded-lg border border-border/50 bg-muted/5 px-4 py-3 text-xs text-muted-foreground space-y-2">
+                <p>
+                  <span className="font-semibold text-foreground">Current deployment:</span>{" "}
+                  Batch processing on a local SQLite store. The Isolation Forest model trains over the full event corpus on startup
+                  and persists scored results. Classification runs synchronously after scoring.
+                </p>
+                <p>
+                  <span className="font-semibold text-foreground">Production path:</span>{" "}
+                  Each pipeline stage is independent and stateless given a behavioral baseline. Feature extraction, Isolation Forest inference,
+                  behavioral evidence scoring, and anomaly classification can each accept a single incoming event and emit a risk-scored result,
+                  making the pipeline compatible with streaming ingestion (e.g. Kafka, Kinesis, Pub/Sub) with no architectural changes beyond
+                  replacing the batch data source. The SQLite store can be swapped for a time-series database or event store.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
         </>
       )}
     </div>

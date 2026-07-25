@@ -204,6 +204,45 @@ export interface PriorityAlert {
   resource_accessed: string;
   geo_location: string;
   label: string;
+  // Step 6: Anomaly-type classification
+  predicted_anomaly_type?: string | null;
+  classification_confidence?: number | null;
+  classification_reasons?: string[];
+}
+
+// ─── Step 6: Temporal Drift ───────────────────────────────────────────────────
+
+export interface TemporalDrift {
+  entity_id: string;
+  baseline_status: 'Established' | 'Cold Start';
+  history_event_count: number;
+  minimum_history_events: number;
+  temporal_drift_score: number;
+  temporal_status: 'Stable' | 'Elevated' | 'High Drift';
+  temporal_reasons: string[];
+}
+
+// ─── Step 6: Anomaly Classification Metrics ───────────────────────────────────
+
+export interface PerTypeClassificationMetric {
+  precision: number;
+  recall: number;
+  f1_score: number;
+  true_positives: number;
+  false_positives: number;
+  false_negatives: number;
+  support: number;
+}
+
+export interface ClassificationMetrics {
+  has_results: boolean;
+  total_anomalous_events?: number;
+  overall_accuracy?: number;
+  unknown_rate?: number;
+  per_type?: Record<string, PerTypeClassificationMetric>;
+  top1_pct_classification_accuracy?: number | null;
+  classifier_leakage_test_passed?: boolean;
+  note?: string;
 }
 
 export interface PriorityAlertsResponse {

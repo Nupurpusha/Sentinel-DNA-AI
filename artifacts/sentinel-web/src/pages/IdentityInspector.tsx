@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams, useLocation } from "wouter";
-import { IdentityResponse, IdentitiesResponse, IdentityRisk, ScoredEvent } from "@/types";
+import { IdentityResponse, IdentitiesResponse, IdentityRisk, ScoredEvent, TemporalDrift } from "@/types";
 import { formatNumber, formatDate, cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import {
   User, Server, MapPin, Clock, Fingerprint, Lock,
-  CheckCircle2, XCircle, ShieldAlert, AlertTriangle,
+  CheckCircle2, XCircle, ShieldAlert, AlertTriangle, Activity,
 } from "lucide-react";
 
 // ─── Risk helpers ─────────────────────────────────────────────────────────────
@@ -59,6 +59,8 @@ export function IdentityInspector() {
 
   const [risk, setRisk] = useState<IdentityRisk | null>(null);
   const [loadingRisk, setLoadingRisk] = useState(false);
+
+  const [drift, setDrift] = useState<TemporalDrift | null>(null);
 
   useEffect(() => {
     const fetchIdentities = async () => {
@@ -112,8 +114,19 @@ export function IdentityInspector() {
       }
     };
 
+    const fetchDrift = async () => {
+      try {
+        const res = await fetch(`/sentinel-api/detection/temporal/${entityId}`);
+        if (res.ok) setDrift(await res.json());
+        else setDrift(null);
+      } catch {
+        setDrift(null);
+      }
+    };
+
     fetchIdentityData();
     fetchRisk();
+    fetchDrift();
   }, [entityId]);
 
   const getLabelColor = (lbl: string) => {
@@ -343,6 +356,105 @@ export function IdentityInspector() {
               </div>
             </CardContent>
           </Card>
+
+          {/* ── Temporal Drift ──────────────────────────────────────────────── */}
+          {(() => {
+            if (!drift) return null;
+
+            // Cold-start case
+            if (drift.baseline_status === "Cold Start") {
+              return (
+                <Card className="border-yellow-500/30">
+                  <CardHeader className="pb-3 bg-yellow-500/5 border-b border-yellow-500/15">
+                    <div className="flex items-center gap-2">
+                      <Activity className="h-5 w-5 text-yellow-400" />
+                      <CardTitle className="text-base text-yellow-400">Temporal Drift Analysis</CardTitle>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="pt-4">
+                    <div className="flex items-center gap-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-4 py-3">
+                      <AlertTriangle className="h-4 w-4 text-yellow-400 shrink-0" />
+                      <div>
+                        <p className="text-sm font-semibold text-yellow-300">Cold Start — insufficient behavioral history</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Only {drift.history_event_count} events recorded; temporal drift scoring requires at least {drift.minimum_history_events}.
+                          Drift metrics will become available once sufficient history is collected.
+                          A score of 0 does <strong>not</strong> indicate this identity is safe.
+                        </p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            }
+
+            // Established baseline — show drift tier + reasons
+            const tierColor =
+              drift.temporal_status === "High Drift"  ? "text-red-400 border-red-500/30 bg-red-500/10" :
+              drift.temporal_status === "Elevated"    ? "text-yellow-400 border-yellow-500/30 bg-yellow-500/10" :
+              "text-emerald-400 border-emerald-500/30 bg-emerald-500/10";
+            const barColor =
+              drift.temporal_status === "High Drift"  ? "bg-red-500" :
+              drift.temporal_status === "Elevated"    ? "bg-yellow-500" :
+              "bg-emerald-500";
+            const cardBorder =
+              drift.temporal_status === "High Drift"  ? "border-red-500/20" :
+              drift.temporal_status === "Elevated"    ? "border-yellow-500/20" :
+              "border-emerald-500/20";
+
+            return (
+              <Card className={cardBorder}>
+                <CardHeader className="pb-3 border-b border-border/50">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Activity className="h-5 w-5 text-muted-foreground" />
+                      <CardTitle className="text-base">Temporal Drift Analysis</CardTitle>
+                    </div>
+                    <Badge variant="outline" className={cn("text-xs border px-2.5 py-0.5", tierColor)}>
+                      {drift.temporal_status}
+                    </Badge>
+                  </div>
+                  <CardDescription className="text-xs mt-1">
+                    Behavioral drift score derived from multi-signal temporal analysis. Labels are never used.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="pt-4 space-y-3">
+                  {/* Score bar */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs text-muted-foreground uppercase tracking-wider">Drift Score</span>
+                      <span className={cn("font-mono font-bold text-sm", tierColor.split(" ")[0])}>
+                        {drift.temporal_drift_score} / 100
+                      </span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-muted/30 overflow-hidden">
+                      <div
+                        className={cn("h-full rounded-full transition-all", barColor)}
+                        style={{ width: `${Math.min(drift.temporal_drift_score, 100)}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between mt-1 text-[10px] text-muted-foreground/60">
+                      <span>Stable (&lt;35)</span><span>Elevated (35–64)</span><span>High Drift (≥65)</span>
+                    </div>
+                  </div>
+
+                  {/* Reasons */}
+                  {drift.temporal_reasons.length > 0 ? (
+                    <ul className="space-y-1.5">
+                      {drift.temporal_reasons.map((reason) => (
+                        <li key={reason} className="flex items-start gap-2 text-xs text-foreground/85">
+                          <AlertTriangle className="h-3 w-3 text-yellow-400 mt-0.5 shrink-0" />
+                          {reason}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">No significant drift signals detected in recent activity windows.</p>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })()}
 
           {/* ── ML Risk Summary ─────────────────────────────────────────────── */}
           {!loadingRisk && risk?.has_results && (risk.recent_anomalies?.length ?? 0) > 0 && (
