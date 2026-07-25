@@ -22,6 +22,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from database import get_connection
 from detector import run_detection, compute_alert_budget
+from temporal import calculate_temporal_drift
 
 router = APIRouter(prefix="/sentinel-api")
 
@@ -53,6 +54,19 @@ def _get_meta(conn, key: str, default=None):
         return row["value"] if row else default
     except Exception:
         return default
+
+
+@router.get("/detection/temporal/{entity_id}")
+def detection_temporal(entity_id: str):
+    """Return explainable temporal drift intelligence for one identity."""
+    conn = get_connection()
+    try:
+        result = calculate_temporal_drift(conn, entity_id)
+    finally:
+        conn.close()
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Identity '{entity_id}' not found")
+    return result
 
 
 # ─── Step 2 routes (preserved) ───────────────────────────────────────────────
