@@ -1,0 +1,81 @@
+STEP 4B — Improve Temporal Signal Sensitivity
+
+Step 4A is implemented correctly and MUST be preserved, but its temporal signal is currently too weak:
+
+lateral_movement mean score: 8.67
+low_slow_exfiltration mean score: 4.80
+insider_drift mean score: 7.75
+High Drift rate: 0% for all three.
+
+This is a SMALL backend-only improvement.
+
+DO NOT:
+- modify frontend
+- modify Step 3 risk scoring
+- modify Top-1% ranking
+- modify Isolation Forest
+- modify generator
+- use ground-truth labels in scoring
+- add new major architecture
+
+GOAL:
+Improve temporal drift sensitivity using better time/sequence comparisons while remaining completely label-independent.
+
+1. Replace the simplistic "latest 10 vs all previous events" comparison with lightweight rolling behavioral analysis.
+
+Use recent windows such as:
+- latest 10 events
+- latest 25 events
+- latest 50 events
+
+Compare recent behavior against an earlier baseline for the SAME identity.
+
+2. Improve temporal signals specifically through generic behavioral concepts, NOT attack-specific rules:
+
+- resource-access expansion over consecutive windows
+- gradual increase in behavioral deviation
+- repeated access to newly introduced resources
+- sustained unusual activity rather than one-event spikes
+- growth in device/location diversity
+- increasing authentication failure rate
+- persistent session-duration deviation
+
+3. Add persistence.
+
+A deviation appearing repeatedly across multiple recent windows should score higher than a one-time deviation.
+
+4. Add trend.
+
+If a behavioral signal is progressively increasing across windows, increase temporal drift.
+
+5. Keep temporal_drift_score 0–100 and human-readable temporal reasons.
+
+Do NOT use label or attack_type anywhere in scoring.
+
+6. Re-run the existing offline evaluation AFTER scores are calculated.
+
+Report mean temporal score and High Drift rate for:
+- lateral_movement
+- low_slow_exfiltration
+- insider_drift
+
+Also report the overall normal-identity temporal score distribution so we can verify that improvement is not simply making everyone High Drift.
+
+CRITICAL:
+Do NOT tune thresholds or individual events using ground-truth attack labels.
+
+Do NOT integrate temporal score into Step 3 ranking yet.
+
+Preserve and rerun label leakage validation.
+
+Then STOP.
+
+Report only:
+1. Files modified
+2. Exact changes to temporal calculation
+3. Normal identity mean / median / 95th percentile temporal score
+4. Lateral movement mean score / High Drift rate
+5. Low-slow exfiltration mean score / High Drift rate
+6. Insider drift mean score / High Drift rate
+7. Label leakage result
+8. Confirmation Steps 1–3 remain unchanged

@@ -10,13 +10,13 @@ all temporal scores have been calculated.
 """
 
 import json
-import math
 from datetime import datetime
 from statistics import mean
 from typing import Any
 
 
-RECENT_EVENT_COUNT = 10
+ROLLING_WINDOW_SIZES = (10, 25, 50)
+SEGMENT_SIZE = 10
 
 # The six independent sequence-level signals sum to 100.
 SIGNAL_WEIGHTS = {
@@ -89,86 +89,91 @@ def _signal(score: float, **details: Any) -> dict[str, Any]:
         "score": normalized,
         "weighted_points": round(normalized * details.pop("weight", 0), 2),
         **details,
-        "triggered": normalized >= 0.35,
+        "triggered": normalized >= 0.25,
     }
 
 
-def _resource_signal(recent: list[dict[str, Any]], history: list[dict[str, Any]], profile: dict[str, Any]) -> dict[str, Any]:
-    recent_resources = {str(row["resource_accessed"]) for row in recent}
-    historical_resources = {str(row["resource_accessed"]) for row in history}
-    if not historical_resources:
-        historical_resources = {str(resource) for resource in profile.get("common_resources", [])}
-    new_resources = recent_resources - historical_resources
-    denominator = max(2.0, len(historical_resources) * 0.4)
-    score = len(new_resources) / denominator if historical_resources else 0.0
-    return _signal(
-        score,
-        weight=SIGNAL_WEIGHTS["resource_expansion"],
-        recent_distinct_resources=len(recent_resources),
-        historical_distinct_resources=len(historical_resources),
-        new_resources=len(new_resources),
-    )
+def _window_pair(events: list[dict[str, Any]], size: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return a recent window and the immediately preceding baseline window."""
+    recent = events[-size:]
+    baseline = events[-(2 * size):-size]
+    if len(baseline) < max(5, size // 2):
+        baseline = events[:-size]
+    return recent, baseline
 
 
-def _frequency_signal(recent: list[dict[str, Any]], history: list[dict[str, Any]]) -> dict[str, Any]:
-    if len(recent) < 2 or len(history) < 2:
-        return _signal(0.0, weight=SIGNAL_WEIGHTS["activity_frequency"], recent_events=len(recent))
-    recent_span = _days_between(_parse_timestamp(recent[0]["timestamp"]), _parse_timestamp(recent[-1]["timestamp"]))
-    history_span = _days_between(_parse_timestamp(history[0]["timestamp"]), _parse_timestamp(history[-1]["timestamp"]))
-    recent_rate = (len(recent) - 1) / recent_span
-    historical_rate = (len(history) - 1) / history_span
-    rate_ratio = recent_rate / max(historical_rate, 1e-9)
-    score = _clamp((rate_ratio - 1.0) / 2.0)
-    return _signal(
-        score,
-        weight=SIGNAL_WEIGHTS["activity_frequency"],
-        recent_events=len(recent),
-        recent_events_per_day=round(recent_rate, 4),
-        historical_events_per_day=round(historical_rate, 4),
-        rate_ratio=round(rate_ratio, 4),
-    )
+def _rate(rows: list[dict[str, Any]]) -> float:
+    if len(rows) < 2:
+        return 0.0
+    span = _days_between(_parse_timestamp(rows[0]["timestamp"]), _parse_timestamp(rows[-1]["timestamp"]))
+    return (len(rows) - 1) / span
 
 
-def _deviation_signal(recent: list[dict[str, Any]], history: list[dict[str, Any]], profile: dict[str, Any]) -> dict[str, Any]:
+def _resource_window_score(recent: list[dict[str, Any]], baseline: list[dict[str, Any]], profile: dict[str, Any]) -> tuple[float, dict[str, Any]]:
+    recent_resources = [str(row["resource_accessed"]) for row in recent]
+    baseline_resources = {str(row["resource_accessed"]) for row in baseline}
+    if not baseline_resources:
+        baseline_resources = {str(resource) for resource in profile.get("common_resources", [])}
+    recent_distinct = set(recent_resources)
+    new_resources = recent_distinct - baseline_resources
+    counts = {resource: recent_resources.count(resource) for resource in new_resources}
+    repeated_new = sum(count for count in counts.values() if count >= 2)
+    expansion = len(new_resources) / max(2.0, len(baseline_resources) * 0.25)
+    repetition = repeated_new / max(len(recent_resources), 1)
+    score = _clamp(0.7 * expansion + 0.3 * repetition)
+    return score, {
+        "recent_distinct_resources": len(recent_distinct),
+        "baseline_distinct_resources": len(baseline_resources),
+        "new_resources": len(new_resources),
+        "repeated_new_resource_accesses": repeated_new,
+    }
+
+
+def _frequency_window_score(recent: list[dict[str, Any]], baseline: list[dict[str, Any]]) -> tuple[float, dict[str, Any]]:
+    recent_rate = _rate(recent)
+    baseline_rate = _rate(baseline)
+    ratio = recent_rate / max(baseline_rate, 1e-9)
+    score = _clamp((ratio - 1.0) / 1.5)
+    return score, {
+        "recent_events_per_day": round(recent_rate, 4),
+        "baseline_events_per_day": round(baseline_rate, 4),
+        "rate_ratio": round(ratio, 4),
+    }
+
+
+def _deviation_window_score(recent: list[dict[str, Any]], baseline: list[dict[str, Any]], profile: dict[str, Any]) -> tuple[float, dict[str, Any]]:
     recent_average = mean(_profile_deviation_count(row, profile) for row in recent) if recent else 0.0
-    historical_average = mean(_profile_deviation_count(row, profile) for row in history) if history else 0.0
-    recent_normalized = recent_average / 7.0
-    increase = _clamp((recent_average - historical_average) / 3.0)
-    score = 0.6 * recent_normalized + 0.4 * increase
-    return _signal(
-        score,
-        weight=SIGNAL_WEIGHTS["behavioral_deviation_accumulation"],
-        recent_average_deviations=round(recent_average, 4),
-        historical_average_deviations=round(historical_average, 4),
-    )
+    baseline_average = mean(_profile_deviation_count(row, profile) for row in baseline) if baseline else 0.0
+    level = _clamp(recent_average / 5.0)
+    increase = _clamp((recent_average - baseline_average) / 2.0)
+    return _clamp(0.55 * level + 0.45 * increase), {
+        "recent_average_deviations": round(recent_average, 4),
+        "baseline_average_deviations": round(baseline_average, 4),
+    }
 
 
-def _failure_signal(recent: list[dict[str, Any]], history: list[dict[str, Any]]) -> dict[str, Any]:
+def _failure_window_score(recent: list[dict[str, Any]], baseline: list[dict[str, Any]]) -> tuple[float, dict[str, Any]]:
     recent_rate = mean(not bool(row["auth_success"]) for row in recent) if recent else 0.0
-    historical_rate = mean(not bool(row["auth_success"]) for row in history) if history else 0.0
-    score = _clamp((recent_rate - historical_rate) * 2.5)
-    return _signal(
-        score,
-        weight=SIGNAL_WEIGHTS["authentication_failure_increase"],
-        recent_failure_rate=round(recent_rate, 4),
-        historical_failure_rate=round(historical_rate, 4),
-    )
+    baseline_rate = mean(not bool(row["auth_success"]) for row in baseline) if baseline else 0.0
+    increase = _clamp((recent_rate - baseline_rate) * 3.0)
+    sustained = _clamp(recent_rate * 1.5)
+    return _clamp(0.65 * increase + 0.35 * sustained), {
+        "recent_failure_rate": round(recent_rate, 4),
+        "baseline_failure_rate": round(baseline_rate, 4),
+    }
 
 
-def _session_signal(recent: list[dict[str, Any]], history: list[dict[str, Any]], profile: dict[str, Any]) -> dict[str, Any]:
+def _session_window_score(recent: list[dict[str, Any]], baseline: list[dict[str, Any]], profile: dict[str, Any]) -> tuple[float, dict[str, Any]]:
     recent_average = mean(_session_deviation(float(row["session_duration"]), profile) for row in recent) if recent else 0.0
-    historical_average = mean(_session_deviation(float(row["session_duration"]), profile) for row in history) if history else 0.0
-    increase = _clamp((recent_average - historical_average) * 2.0)
-    score = 0.6 * _clamp(recent_average) + 0.4 * increase
-    return _signal(
-        score,
-        weight=SIGNAL_WEIGHTS["session_duration_deviation"],
-        recent_average_deviation=round(recent_average, 4),
-        historical_average_deviation=round(historical_average, 4),
-    )
+    baseline_average = mean(_session_deviation(float(row["session_duration"]), profile) for row in baseline) if baseline else 0.0
+    increase = _clamp((recent_average - baseline_average) * 2.0)
+    return _clamp(0.65 * recent_average + 0.35 * increase), {
+        "recent_average_deviation": round(recent_average, 4),
+        "baseline_average_deviation": round(baseline_average, 4),
+    }
 
 
-def _diversity_signal(recent: list[dict[str, Any]], history: list[dict[str, Any]]) -> dict[str, Any]:
+def _diversity_window_score(recent: list[dict[str, Any]], baseline: list[dict[str, Any]]) -> tuple[float, dict[str, Any]]:
     def diversity(rows: list[dict[str, Any]]) -> float:
         if not rows:
             return 0.0
@@ -177,16 +182,95 @@ def _diversity_signal(recent: list[dict[str, Any]], history: list[dict[str, Any]
         return (devices + locations) / 2.0
 
     recent_value = diversity(recent)
-    historical_value = diversity(history)
-    score = _clamp((recent_value - historical_value) * 2.0)
-    return _signal(
-        score,
-        weight=SIGNAL_WEIGHTS["device_location_diversity"],
-        recent_diversity=round(recent_value, 4),
-        historical_diversity=round(historical_value, 4),
-        recent_distinct_devices=len({str(row["device_fingerprint"]) for row in recent}),
-        recent_distinct_locations=len({str(row["geo_location"]) for row in recent}),
+    baseline_value = diversity(baseline)
+    growth = _clamp((recent_value - baseline_value) * 2.0)
+    sustained = _clamp(recent_value * 0.75)
+    return _clamp(0.7 * growth + 0.3 * sustained), {
+        "recent_diversity": round(recent_value, 4),
+        "baseline_diversity": round(baseline_value, 4),
+        "recent_distinct_devices": len({str(row["device_fingerprint"]) for row in recent}),
+        "recent_distinct_locations": len({str(row["geo_location"]) for row in recent}),
+    }
+
+
+SIGNAL_CALCULATORS = {
+    "resource_expansion": _resource_window_score,
+    "activity_frequency": _frequency_window_score,
+    "behavioral_deviation_accumulation": _deviation_window_score,
+    "authentication_failure_increase": _failure_window_score,
+    "session_duration_deviation": _session_window_score,
+    "device_location_diversity": _diversity_window_score,
+}
+
+
+def _rolling_signal(
+    events: list[dict[str, Any]],
+    profile: dict[str, Any],
+    name: str,
+) -> dict[str, Any]:
+    """Aggregate three recent-vs-prior windows with persistence and trend."""
+    calculator = SIGNAL_CALCULATORS[name]
+    window_scores: dict[str, float] = {}
+    window_details: dict[str, dict[str, Any]] = {}
+    for size in ROLLING_WINDOW_SIZES:
+        recent, baseline = _window_pair(events, size)
+        raw_score, details = calculator(recent, baseline, profile) if name in {
+            "resource_expansion", "behavioral_deviation_accumulation",
+            "session_duration_deviation",
+        } else calculator(recent, baseline)
+        window_scores[str(size)] = round(raw_score, 4)
+        window_details[str(size)] = details
+
+    available_scores = [window_scores[str(size)] for size in ROLLING_WINDOW_SIZES if len(events) >= size * 2]
+    if not available_scores:
+        available_scores = list(window_scores.values())
+    weighted_recent = sum(
+        window_scores[str(size)] * weight
+        for size, weight in ((10, 0.5), (25, 0.3), (50, 0.2))
     )
+    persistent_windows = sum(score >= 0.25 for score in available_scores)
+    persistence = persistent_windows / len(available_scores)
+
+    # Consecutive 10-event segments expose a genuine direction of travel
+    # without treating a one-event spike as a trend.
+    segment_scores: list[float] = []
+    segment_count = min(5, len(events) // SEGMENT_SIZE)
+    for segment_index in range(segment_count - 1):
+        end = len(events) - segment_index * SEGMENT_SIZE
+        recent = events[end - SEGMENT_SIZE:end]
+        baseline = events[end - 2 * SEGMENT_SIZE:end - SEGMENT_SIZE]
+        raw_score, _ = calculator(recent, baseline, profile) if name in {
+            "resource_expansion", "behavioral_deviation_accumulation",
+            "session_duration_deviation",
+        } else calculator(recent, baseline)
+        segment_scores.append(raw_score)
+    segment_scores.reverse()
+    segment_persistence = (
+        sum(score >= 0.25 for score in segment_scores) / len(segment_scores)
+        if segment_scores else 0.0
+    )
+    trend = 0.0
+    if len(segment_scores) >= 3:
+        trend = _clamp((segment_scores[-1] - mean(segment_scores[:-1])) / 0.35)
+
+    final_score = _clamp(
+        0.50 * weighted_recent
+        + 0.25 * persistence
+        + 0.15 * segment_persistence
+        + 0.10 * trend
+    )
+    return {
+        "score": round(final_score, 4),
+        "weighted_points": round(final_score * SIGNAL_WEIGHTS[name], 2),
+        "window_scores": window_scores,
+        "window_details": window_details,
+        "persistent_windows": persistent_windows,
+        "available_windows": len(available_scores),
+        "segment_scores": [round(score, 4) for score in segment_scores],
+        "segment_persistence": round(segment_persistence, 4),
+        "trend": round(trend, 4),
+        "triggered": final_score >= 0.25,
+    }
 
 
 def _status(score: float) -> str:
@@ -218,16 +302,9 @@ def calculate_temporal_drift(conn, entity_id: str) -> dict[str, Any] | None:
     ).fetchall()
     events = [dict(row) for row in rows]
     profile = json.loads(identity["profile"])
-    recent = events[-RECENT_EVENT_COUNT:]
-    history = events[:-RECENT_EVENT_COUNT]
-
     signals = {
-        "resource_expansion": _resource_signal(recent, history, profile),
-        "activity_frequency": _frequency_signal(recent, history),
-        "behavioral_deviation_accumulation": _deviation_signal(recent, history, profile),
-        "authentication_failure_increase": _failure_signal(recent, history),
-        "session_duration_deviation": _session_signal(recent, history, profile),
-        "device_location_diversity": _diversity_signal(recent, history),
+        name: _rolling_signal(events, profile, name)
+        for name in SIGNAL_CALCULATORS
     }
     score = round(sum(signal["weighted_points"] for signal in signals.values()))
     reasons_by_signal = {
@@ -250,8 +327,9 @@ def calculate_temporal_drift(conn, entity_id: str) -> dict[str, Any] | None:
         "temporal_status": _status(score),
         "temporal_reasons": reasons,
         "temporal_signals": signals,
-        "recent_event_count": len(recent),
-        "historical_event_count": len(history),
+        "recent_event_count": min(len(events), max(ROLLING_WINDOW_SIZES)),
+        "historical_event_count": max(0, len(events) - max(ROLLING_WINDOW_SIZES)),
+        "rolling_window_sizes": list(ROLLING_WINDOW_SIZES),
     }
 
 
