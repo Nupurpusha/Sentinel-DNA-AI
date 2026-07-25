@@ -1,0 +1,77 @@
+Continue SentinelDNA from the CURRENT working repository.
+
+Do NOT rebuild or redesign existing functionality. Previous agents already implemented Steps 1–5, and anomaly-type classification may be PARTIALLY implemented. First inspect existing code and continue from the current state instead of duplicating work.
+
+Finish ONLY these remaining hackathon requirements:
+
+1. ANOMALY-TYPE CLASSIFICATION
+Complete the existing classifier implementation if incomplete.
+
+For suspicious/priority alerts, predict:
+- brute_force
+- credential_stuffing
+- insider_drift
+- low_slow_exfiltration
+- lateral_movement
+- impossible_travel
+- device_spoofing
+- unknown/suspicious
+
+Ground-truth labels MUST NOT be classifier/model/scoring inputs. Use labels only AFTER predictions for offline evaluation.
+
+Show predicted anomaly type + confidence in the existing Priority Alert investigation dialog.
+
+Evaluate honestly and report overall classification performance and per-class results. Never hard-code predictions or metrics.
+
+2. CONCEPT DRIFT UI
+Temporal drift scoring already exists. DO NOT rewrite temporal.py unless required for a genuine bug.
+
+In Identity Inspector show:
+- Stable
+- Elevated
+- High Drift
+- temporal reasons when available
+
+For identities with <50 events, clearly display:
+“Cold Start — insufficient behavioral history”
+using the existing reliability/baseline fields. Never present temporal score 0 as evidence that a cold-start identity is safe.
+
+3. SYSTEM / STREAMING READINESS
+Do NOT build Kafka or unnecessary infrastructure.
+
+Add only a concise architecture/readiness explanation in documentation or an appropriate existing UI section:
+
+Telemetry → Identity Baseline → Feature Extraction → Isolation Forest → Behavioral Evidence → Risk Ranking → Anomaly Classification → SOC Investigation
+
+State that the prototype currently uses local/batch telemetry but its modular scoring pipeline can accept streaming event ingestion in a production deployment.
+
+4. FINAL VERIFICATION
+Verify:
+- Data Foundation
+- Identity Inspector
+- SOC Overview
+- Model Performance
+- Top-1% alert budget
+- Priority Alert investigation
+- explainability
+- temporal drift
+- cold-start handling
+- anomaly classification
+- label independence
+
+DO NOT modify the validated dataset generator, Isolation Forest configuration, Step 3 final-risk formula, risk thresholds, Top-1% ranking, or existing metrics unless fixing a real bug.
+
+PRIORITY:
+Finish working implementation and tests before cosmetic improvements. Do not spend time redesigning the UI.
+
+At the end give a concise report:
+- files modified
+- classifier method/features
+- classification metrics + per-class performance
+- concept-drift UI result
+- cold-start test result
+- label-leakage/independence result
+- regression result
+- anything still incomplete
+
+Start implementation immediately. Minimize explanation before coding.
