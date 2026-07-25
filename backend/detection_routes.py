@@ -83,17 +83,19 @@ def run_detection_endpoint(force: bool = Query(False)):
 
 @router.get("/detection/status")
 def detection_status():
-    """Check whether detection results exist, and label leakage test result."""
+    """Check whether detection results exist, label leakage test, and classifier leakage test."""
     conn = get_connection()
     try:
-        count   = _detection_exists(conn)
-        leakage = _get_meta(conn, "label_leakage_test_passed", "false")
+        count              = _detection_exists(conn)
+        leakage            = _get_meta(conn, "label_leakage_test_passed", "false")
+        cls_leakage        = _get_meta(conn, "classifier_leakage_test_passed", "false")
     finally:
         conn.close()
     return {
-        "has_results": count > 0,
-        "scored_events": count,
-        "label_leakage_test_passed": leakage == "true",
+        "has_results":                    count > 0,
+        "scored_events":                  count,
+        "label_leakage_test_passed":      leakage == "true",
+        "classifier_leakage_test_passed": cls_leakage == "true",
     }
 
 
@@ -424,6 +426,8 @@ def detection_priority_alerts(budget_pct: float = Query(1.0, ge=0.1, le=10.0)):
             SELECT dr.event_id, dr.entity_id, dr.risk_score, dr.risk_level,
                    dr.behavioral_deviation_score, dr.evidence_count,
                    dr.ml_score_norm, dr.reasons,
+                   dr.predicted_anomaly_type, dr.classification_confidence,
+                   dr.classification_reasons,
                    e.timestamp, e.entity_type, e.geo_location, e.resource_accessed, e.label
             FROM detection_results dr
             JOIN events e ON dr.event_id = e.event_id
@@ -441,21 +445,29 @@ def detection_priority_alerts(budget_pct: float = Query(1.0, ge=0.1, le=10.0)):
             reasons = json.loads(r["reasons"])
         except Exception:
             reasons = []
+        try:
+            cls_reasons = json.loads(r["classification_reasons"] or "[]")
+        except Exception:
+            cls_reasons = []
         alerts.append({
-            "event_id":                  r["event_id"],
-            "entity_id":                 r["entity_id"],
-            "entity_type":               r["entity_type"],
-            "timestamp":                 r["timestamp"],
-            "risk_score":                r["risk_score"],
-            "risk_level":                r["risk_level"],
-            "ml_score_norm":             r["ml_score_norm"],
+            "event_id":                   r["event_id"],
+            "entity_id":                  r["entity_id"],
+            "entity_type":                r["entity_type"],
+            "timestamp":                  r["timestamp"],
+            "risk_score":                 r["risk_score"],
+            "risk_level":                 r["risk_level"],
+            "ml_score_norm":              r["ml_score_norm"],
             "behavioral_deviation_score": r["behavioral_deviation_score"],
-            "evidence_count":            r["evidence_count"],
-            "primary_reason":            reasons[0] if reasons else "—",
-            "reasons":                   reasons,
-            "resource_accessed":         r["resource_accessed"],
-            "geo_location":              r["geo_location"],
-            "label":                     r["label"],   # included for UI display context only
+            "evidence_count":             r["evidence_count"],
+            "primary_reason":             reasons[0] if reasons else "—",
+            "reasons":                    reasons,
+            "resource_accessed":          r["resource_accessed"],
+            "geo_location":               r["geo_location"],
+            "label":                      r["label"],   # display context only
+            # ── Step 6: classification ──────────────────────────────────────
+            "predicted_anomaly_type":     r["predicted_anomaly_type"],
+            "classification_confidence":  r["classification_confidence"],
+            "classification_reasons":     cls_reasons,
         })
 
     return {
@@ -586,6 +598,38 @@ def detection_alert_budget():
             "Events are ranked using unsupervised behavioral risk. "
             "Ground-truth labels are applied only after ranking for offline evaluation."
         ),
+    }
+
+
+@router.get("/detection/classification-metrics")
+def detection_classification_metrics():
+    """
+    Step 6: Anomaly-type classification accuracy metrics.
+
+    Returns per-type precision/recall/F1, confusion matrix, unknown rate,
+    overall accuracy, and Top-1% classification accuracy.
+
+    Labels are used ONLY post-hoc for evaluation — never during classification.
+    """
+    conn = get_connection()
+    try:
+        raw = _get_meta(conn, "classifier_metrics")
+        cls_leakage = _get_meta(conn, "classifier_leakage_test_passed", "false")
+    finally:
+        conn.close()
+
+    if raw is None:
+        return {"has_results": False, "note": "Run detection first to generate classification metrics."}
+
+    try:
+        metrics = json.loads(raw)
+    except Exception:
+        return {"has_results": False, "note": "Classification metrics could not be parsed."}
+
+    return {
+        "has_results": True,
+        "classifier_leakage_test_passed": cls_leakage == "true",
+        **metrics,
     }
 
 

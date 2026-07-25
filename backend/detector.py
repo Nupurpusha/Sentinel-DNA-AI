@@ -35,6 +35,7 @@ from sklearn.metrics import (
 )
 
 from database import get_connection
+from classifier import classify_all, run_classifier_leakage_test, evaluate_classifier
 
 # ─── Hyperparameters ─────────────────────────────────────────────────────────
 RANDOM_SEED = 42
@@ -108,6 +109,16 @@ def _has_step3_columns(conn) -> bool:
         info = conn.execute("PRAGMA table_info(detection_results)").fetchall()
         cols = {row["name"] for row in info}
         return "behavioral_deviation_score" in cols and "evidence_count" in cols and "ml_score_norm" in cols
+    except Exception:
+        return False
+
+
+def _has_step6_columns(conn) -> bool:
+    """Return True if detection_results already has the Step 6 classification columns."""
+    try:
+        info = conn.execute("PRAGMA table_info(detection_results)").fetchall()
+        cols = {row["name"] for row in info}
+        return "predicted_anomaly_type" in cols
     except Exception:
         return False
 
@@ -426,13 +437,11 @@ def _generate_explanation(row: dict) -> list:
 
 # ─── Persistence ──────────────────────────────────────────────────────────────
 
-def _persist_results(scored_df: pd.DataFrame):
-    """Write all detection results to the detection_results table (Step 3 schema)."""
+def _persist_results(classified_df: pd.DataFrame):
+    """Write all detection results to the detection_results table (Step 6 schema)."""
     conn = get_connection()
     try:
-        # Drop and recreate to ensure Step 3 schema columns are present.
-        # SQLite's CREATE TABLE IF NOT EXISTS does not alter existing tables,
-        # so we must drop first on schema migration.
+        # Drop and recreate to ensure the full Step 6 schema is present.
         conn.execute("DROP TABLE IF EXISTS detection_results")
         conn.execute("""
             CREATE TABLE detection_results (
@@ -445,12 +454,15 @@ def _persist_results(scored_df: pd.DataFrame):
                 risk_score                 INTEGER NOT NULL,
                 predicted_anomaly          INTEGER NOT NULL,
                 risk_level                 TEXT NOT NULL,
-                reasons                    TEXT NOT NULL
+                reasons                    TEXT NOT NULL,
+                predicted_anomaly_type     TEXT,
+                classification_confidence  REAL,
+                classification_reasons     TEXT
             )
         """)
 
         rows = []
-        for _, row in scored_df.iterrows():
+        for _, row in classified_df.iterrows():
             reasons = _generate_explanation(row.to_dict())
             rows.append((
                 row["event_id"],
@@ -459,22 +471,26 @@ def _persist_results(scored_df: pd.DataFrame):
                 int(row["ml_score_norm"]),
                 int(row["behavioral_deviation_score"]),
                 int(row["evidence_count"]),
-                int(row["risk_score"]),       # = final_risk_score
+                int(row["risk_score"]),
                 int(row["predicted_anomaly"]),
                 row["risk_level"],
                 json.dumps(reasons),
+                row.get("predicted_anomaly_type"),
+                row.get("classification_confidence"),
+                row.get("classification_reasons", json.dumps([])),
             ))
 
         conn.executemany(
             """INSERT OR REPLACE INTO detection_results
                (event_id, entity_id, anomaly_score, ml_score_norm,
                 behavioral_deviation_score, evidence_count,
-                risk_score, predicted_anomaly, risk_level, reasons)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                risk_score, predicted_anomaly, risk_level, reasons,
+                predicted_anomaly_type, classification_confidence, classification_reasons)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             rows,
         )
         conn.commit()
-        print(f"Persisted {len(rows)} detection results to SQLite (Step 3 schema).")
+        print(f"Persisted {len(rows)} detection results to SQLite (Step 6 schema).")
     except Exception as exc:
         conn.rollback()
         raise exc
@@ -663,10 +679,10 @@ def run_detection(force: bool = False) -> dict:
         except Exception:
             existing  = 0
 
-        # Force retrain if Step 3 columns are missing (schema migration)
+        # Force retrain if Step 3 or Step 6 columns are missing (schema migration)
         if existing > 0 and not force:
-            if not _has_step3_columns(conn):
-                print("Step 3 columns missing — forcing retrain for schema migration...")
+            if not _has_step3_columns(conn) or not _has_step6_columns(conn):
+                print("Schema columns missing — forcing retrain for schema migration...")
                 force = True
     finally:
         conn.close()
@@ -691,10 +707,26 @@ def run_detection(force: bool = False) -> dict:
     leakage_passed = _run_label_leakage_test(feat_df)
     print(f"Label leakage test: {'PASSED' if leakage_passed else 'FAILED'}")
 
-    print("Step 2+3: Persisting detection results...")
-    _persist_results(scored_df)
+    print("Step 6: Classifying anomaly types (no labels used)...")
+    classified_df = classify_all(scored_df)
 
-    # Persist label leakage result for API exposure
+    print("Step 6: Running classifier label-independence test...")
+    classifier_leakage_passed = run_classifier_leakage_test(scored_df)
+    print(f"Classifier label-independence test: {'PASSED' if classifier_leakage_passed else 'FAILED'}")
+
+    print("Step 2+3+6: Persisting detection results...")
+    _persist_results(classified_df)
+
+    # Evaluate classifier post-hoc (labels used ONLY here)
+    print("Step 6: Evaluating classifier accuracy (post-hoc, labels used here only)...")
+    classifier_metrics = evaluate_classifier(classified_df)
+    print(
+        f"Step 6: Overall accuracy={classifier_metrics.get('overall_accuracy')}, "
+        f"Unknown rate={classifier_metrics.get('unknown_rate')}, "
+        f"Top-1% accuracy={classifier_metrics.get('top1_pct_classification_accuracy')}"
+    )
+
+    # Persist meta values for API exposure
     conn = get_connection()
     try:
         conn.execute("""
@@ -703,16 +735,25 @@ def run_detection(force: bool = False) -> dict:
                 value TEXT NOT NULL
             )
         """)
+        import json as _json
         conn.execute(
             "INSERT OR REPLACE INTO detection_meta (key, value) VALUES (?, ?)",
             ("label_leakage_test_passed", "true" if leakage_passed else "false"),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO detection_meta (key, value) VALUES (?, ?)",
+            ("classifier_leakage_test_passed", "true" if classifier_leakage_passed else "false"),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO detection_meta (key, value) VALUES (?, ?)",
+            ("classifier_metrics", _json.dumps(classifier_metrics)),
         )
         conn.commit()
     finally:
         conn.close()
 
-    metrics = _compute_metrics(scored_df)
-    budget  = compute_alert_budget(scored_df)
+    metrics = _compute_metrics(classified_df)
+    budget  = compute_alert_budget(classified_df)
 
     print(
         f"Step 2+3: Evaluation — Precision={metrics['precision']}, "
@@ -726,9 +767,11 @@ def run_detection(force: bool = False) -> dict:
 
     return {
         "status":             "trained",
-        "scored_events":      len(scored_df),
-        "detected_anomalies": int(scored_df["predicted_anomaly"].sum()),
+        "scored_events":      len(classified_df),
+        "detected_anomalies": int(classified_df["predicted_anomaly"].sum()),
         "metrics":            metrics,
         "alert_budget":       budget,
-        "label_leakage_test_passed": leakage_passed,
+        "label_leakage_test_passed":       leakage_passed,
+        "classifier_leakage_test_passed":  classifier_leakage_passed,
+        "classifier_metrics":              classifier_metrics,
     }
