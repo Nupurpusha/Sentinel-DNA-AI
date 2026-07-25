@@ -1,0 +1,276 @@
+I am building a hackathon project called:
+
+SentinelDNA — AI-Powered Behavioral Anomaly Detection for Cybersecurity
+
+IMPORTANT:
+I am a beginner with this project, so build this incrementally. Do NOT try to implement the entire application yet. For this first step, only create the project foundation and synthetic cybersecurity data generator described below.
+
+PROJECT GOAL
+
+The final system will learn the normal behavioral patterns of users/devices from access logs and detect unusual behavior such as brute force attacks, impossible travel, credential stuffing, lateral movement, device spoofing, and low-and-slow exfiltration.
+
+Eventually the system will provide:
+- behavioral anomaly detection
+- attack classification
+- explainable risk scores
+- behavioral profiles for each identity
+- cold-start handling
+- concept-drift handling
+- a SOC analyst dashboard
+
+However, DO NOT build those ML/detection features yet.
+
+For STEP 1, build only the application foundation and synthetic data generation system.
+
+TECH STACK
+
+Use:
+
+Frontend:
+- React
+- TypeScript
+- Tailwind CSS
+
+Backend:
+- Python
+- FastAPI
+
+Data processing:
+- pandas
+- numpy
+
+Storage:
+- SQLite
+
+The frontend and Python backend must actually communicate through APIs.
+
+STEP 1 REQUIREMENTS
+
+1. Create a clean modular project structure separating:
+- frontend
+- backend
+- data generation
+- database/storage
+
+2. Build a Python synthetic cybersecurity access-log generator.
+
+Generate at least 300 synthetic identities.
+
+Each identity should have an entity type:
+- user
+- service_account
+- edge_device
+
+For users, also assign a department such as:
+- Engineering
+- Finance
+- HR
+- Sales
+- Operations
+- IT
+
+3. Every generated access event must contain:
+
+event_id
+entity_id
+entity_type
+timestamp
+source_ip
+geo_location
+latitude
+longitude
+resource_accessed
+auth_method
+auth_success
+session_duration
+command_sequence
+device_fingerprint
+department
+label
+
+4. NORMAL BEHAVIOR MUST BE CONSISTENT PER IDENTITY.
+
+Do not generate completely random events.
+
+Each identity must first receive a hidden normal behavioral profile containing things such as:
+
+- normal working/login hours
+- primary geographic location
+- one or more known devices
+- common resources/applications
+- preferred authentication method
+- typical session-duration range
+- typical command sequences
+
+Normal events should then be generated mostly according to that identity's profile, with realistic small variations.
+
+This is important because later our anomaly detector needs to learn what is normal for each identity.
+
+5. Generate approximately 98-99% NORMAL events.
+
+Inject approximately 1-2% anomalous events.
+
+Support these anomaly labels:
+
+normal
+brute_force
+impossible_travel
+credential_stuffing
+lateral_movement
+device_spoofing
+low_slow_exfiltration
+insider_drift
+
+For now, implement realistic synthetic patterns for each attack type.
+
+Examples:
+
+BRUTE FORCE:
+Many failed authentication attempts from the same source within a short period.
+
+IMPOSSIBLE TRAVEL:
+The same identity authenticates from geographically distant locations within an impossible travel time.
+
+CREDENTIAL STUFFING:
+One or a small number of source IPs attempt authentication against many different identities with a high failure rate.
+
+LATERAL MOVEMENT:
+An identity suddenly accesses unusual systems/resources and follows command/resource sequences outside its historical behavior.
+
+DEVICE SPOOFING:
+An identity appears using a device fingerprint inconsistent with its trusted historical devices.
+
+LOW-AND-SLOW EXFILTRATION:
+An identity gradually performs unusual off-hours access or increasing resource/data access over multiple events.
+
+INSIDER DRIFT:
+An identity's behavior gradually changes over time rather than producing one obvious attack event.
+
+6. IMPORTANT ML SAFETY REQUIREMENT
+
+The "label" column exists ONLY as ground truth for future model evaluation.
+
+Do not use the label to generate any detection score or dashboard risk score.
+
+Later the ML model must infer anomalies without seeing this field.
+
+7. Generate at least 50,000 total events initially.
+
+Store generated events in SQLite.
+
+Also provide an option to export the generated dataset as CSV.
+
+8. CREATE BACKEND API ENDPOINTS
+
+At minimum create endpoints for:
+
+- getting dataset summary
+- retrieving access events with pagination
+- filtering events by entity_id
+- filtering events by label
+- retrieving a specific identity's events
+- regenerating the synthetic dataset
+- downloading/exporting CSV
+
+9. CREATE A SIMPLE FRONTEND FOR STEP 1
+
+Do NOT build the final SOC dashboard yet.
+
+Create a clean temporary page called:
+
+"SentinelDNA — Data Foundation"
+
+Show:
+
+- total number of events
+- number of identities
+- percentage of normal events
+- percentage of anomalous events
+- counts by anomaly type
+- counts by entity type
+
+Below that, show a searchable/filterable table of generated access events.
+
+Allow filtering by:
+- entity
+- entity type
+- department
+- label
+
+Add a button:
+
+"Regenerate Synthetic Dataset"
+
+and a button:
+
+"Export CSV"
+
+10. Add another simple view called:
+
+"Identity Profile Inspector"
+
+Allow me to select an entity such as USER_001.
+
+Show the hidden normal behavioral profile that was used to generate that identity's events:
+
+- normal login hours
+- primary location
+- known devices
+- common resources
+- preferred authentication method
+- normal session duration
+
+Then show that identity's generated event history underneath.
+
+This page is important because I need to verify that normal behavior is genuinely consistent rather than random.
+
+11. VALIDATION
+
+After implementing everything, run the project and validate:
+
+- frontend starts successfully
+- backend starts successfully
+- frontend can call backend
+- SQLite database is populated
+- at least 50,000 events exist
+- approximately 98-99% events are normal
+- anomaly events are approximately 1-2%
+- all requested anomaly categories are represented
+- normal events for the same identity demonstrate consistent behavioral patterns
+- CSV export works
+
+Fix any runtime errors you encounter.
+
+12. README
+
+Create a README explaining in beginner-friendly language:
+
+- what was built in Step 1
+- project folder structure
+- how the synthetic generator works
+- what each dataset column means
+- how each attack type is simulated
+- how to run the application
+
+IMPORTANT:
+
+Do not implement machine learning yet.
+Do not implement Isolation Forest yet.
+Do not create fake risk scores.
+Do not hard-code performance metrics.
+Do not build the final SOC dashboard yet.
+Do not add an LLM.
+Do not require any paid API.
+
+Focus on making Step 1 genuinely functional and reliable.
+
+At the end, tell me:
+
+1. What files you created
+2. How many events were generated
+3. Exact normal/anomaly percentage
+4. How I can verify the dataset visually
+5. What API endpoints were created
+6. Any problems or limitations you encountered
+
+Do not proceed to Step 2 until I explicitly ask you to.
