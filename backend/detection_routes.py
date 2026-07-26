@@ -70,6 +70,20 @@ def detection_temporal(entity_id: str):
     return result
 
 
+@router.get("/detection/sequence/evaluation")
+def detection_sequence_evaluation():
+    """
+    Evaluate the GRU on deterministic chronological holdouts.
+
+    Must be registered before /{entity_id} so FastAPI does not absorb the
+    literal path segment "evaluation" as a path parameter value.
+    """
+    try:
+        return evaluate_sequence_detector()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.get("/detection/sequence/{entity_id}")
 def detection_sequence(entity_id: str):
     """Return a chronological GRU sequence anomaly score for one identity."""
@@ -80,15 +94,6 @@ def detection_sequence(entity_id: str):
     if result is None:
         raise HTTPException(status_code=404, detail=f"Identity '{entity_id}' not found")
     return result
-
-
-@router.get("/detection/sequence/evaluation")
-def detection_sequence_evaluation():
-    """Evaluate the existing GRU on chronological holdout events."""
-    try:
-        return evaluate_sequence_detector()
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ─── Step 2 routes (preserved) ───────────────────────────────────────────────

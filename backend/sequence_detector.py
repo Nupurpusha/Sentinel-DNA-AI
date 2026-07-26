@@ -278,7 +278,10 @@ def _score_group_from(group: pd.DataFrame, model: _SequenceModel, start_index: i
             "timestamp": row["timestamp"],
             "score": round(float(score), 2),
             "prediction_error": round(error, 6),
-            "label": row["label"],
+            # label is post-hoc metadata; present when called from the evaluation
+            # path but absent when called from the label-leakage test (which uses
+            # label-free groups to prove labels cannot influence scores).
+            "label": row["label"] if "label" in group.columns else None,
         })
     return scores
 
