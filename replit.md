@@ -4,7 +4,7 @@ An AI-powered behavioral anomaly detection platform for cybersecurity. Generates
 
 ## Stack
 
-- **Backend**: Python 3.12 · FastAPI · SQLite · scikit-learn (Isolation Forest)
+- **Backend**: Python 3.13 · FastAPI · SQLite · scikit-learn (Isolation Forest)
 - **Frontend**: React + TypeScript · Vite · Tailwind CSS · Recharts · Wouter
 - **Workspace**: pnpm monorepo
 
