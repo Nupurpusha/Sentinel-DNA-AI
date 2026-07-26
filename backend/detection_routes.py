@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException, Query
 from database import get_connection
 from detector import run_detection, compute_alert_budget
 from temporal import calculate_temporal_drift
+from sequence_detector import sequence_score_for_identity
 
 router = APIRouter(prefix="/sentinel-api")
 
@@ -64,6 +65,18 @@ def detection_temporal(entity_id: str):
         result = calculate_temporal_drift(conn, entity_id)
     finally:
         conn.close()
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Identity '{entity_id}' not found")
+    return result
+
+
+@router.get("/detection/sequence/{entity_id}")
+def detection_sequence(entity_id: str):
+    """Return a chronological GRU sequence anomaly score for one identity."""
+    try:
+        result = sequence_score_for_identity(entity_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
     if result is None:
         raise HTTPException(status_code=404, detail=f"Identity '{entity_id}' not found")
     return result
