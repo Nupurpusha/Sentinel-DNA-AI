@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
-import { ModelMetrics, AlertBudgetResponse, AttackCoverageResponse, DetectionStatus, ClassificationMetrics } from "@/types";
+import { ModelMetrics, AlertBudgetResponse, AttackCoverageResponse, DetectionStatus, ClassificationMetrics, SequenceEvaluation } from "@/types";
 import { formatNumber, cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, ShieldCheck, AlertTriangle, Info, CheckCircle2, XCircle, Shield, Tag, Workflow } from "lucide-react";
+import { RefreshCw, ShieldCheck, AlertTriangle, Info, CheckCircle2, XCircle, Shield, Tag, Workflow, Cpu } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
 } from "recharts";
@@ -31,24 +31,27 @@ export function ModelPerformance() {
   const [coverage, setCoverage]           = useState<AttackCoverageResponse | null>(null);
   const [status, setStatus]               = useState<DetectionStatus | null>(null);
   const [classMetrics, setClassMetrics]   = useState<ClassificationMetrics | null>(null);
+  const [seqEval, setSeqEval]             = useState<SequenceEvaluation | null>(null);
   const [loading, setLoading]             = useState(true);
   const [running, setRunning]             = useState(false);
 
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [metricsRes, budgetRes, coverageRes, statusRes, classRes] = await Promise.all([
+      const [metricsRes, budgetRes, coverageRes, statusRes, classRes, seqEvalRes] = await Promise.all([
         fetch("/sentinel-api/detection/metrics"),
         fetch("/sentinel-api/detection/alert-budget"),
         fetch("/sentinel-api/detection/attack-coverage"),
         fetch("/sentinel-api/detection/status"),
         fetch("/sentinel-api/detection/classification-metrics"),
+        fetch("/sentinel-api/detection/sequence/evaluation"),
       ]);
       if (metricsRes.ok)   setMetrics(await metricsRes.json());
       if (budgetRes.ok)    setBudget(await budgetRes.json());
       if (coverageRes.ok)  setCoverage(await coverageRes.json());
       if (statusRes.ok)    setStatus(await statusRes.json());
       if (classRes.ok)     setClassMetrics(await classRes.json());
+      if (seqEvalRes.ok)   setSeqEval(await seqEvalRes.json());
     } catch (err) {
       console.error(err);
     } finally {
@@ -515,6 +518,129 @@ export function ModelPerformance() {
             </Card>
           )}
 
+          {/* ── GRU Sequence Detector ───────────────────────────────────────── */}
+          {seqEval?.has_results && seqEval.metrics && seqEval.evaluation && (
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Cpu className="h-4 w-4 text-sky-400" />
+                  <CardTitle className="text-base">Sequence-Aware Detection</CardTitle>
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 border border-sky-500/30 text-sky-400">
+                    GRU Sequence Detector
+                  </Badge>
+                  {seqEval.label_leakage?.sequence_scores_unchanged && (
+                    <div className="flex items-center gap-1 ml-auto">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                      <span className="text-xs text-emerald-500 font-semibold font-mono">Label-independent PASSED</span>
+                    </div>
+                  )}
+                </div>
+                <CardDescription className="text-xs mt-1">
+                  GRU next-event predictor trained on unlabeled behavioral sequences. Evaluated on deterministic
+                  chronological 80/20 per-identity holdouts — ground-truth labels applied only after scoring.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* Metrics row */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {seqEval.metrics.roc_auc != null && (
+                    <div className="rounded-md border border-border/50 bg-muted/10 px-3 py-2.5">
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">ROC-AUC</p>
+                      <p className="text-2xl font-mono font-bold text-emerald-500">
+                        {seqEval.metrics.roc_auc.toFixed(3)}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">Ranking quality on holdout</p>
+                    </div>
+                  )}
+                  <div className="rounded-md border border-border/50 bg-muted/10 px-3 py-2.5">
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Recall @ 50</p>
+                    <p className="text-2xl font-mono font-bold text-orange-500">
+                      {(seqEval.metrics.recall * 100).toFixed(1)}%
+                    </p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">Attacks detected above threshold</p>
+                  </div>
+                  <div className="rounded-md border border-border/50 bg-muted/10 px-3 py-2.5">
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Precision @ 50</p>
+                    <p className="text-2xl font-mono font-bold text-primary">
+                      {(seqEval.metrics.precision * 100).toFixed(1)}%
+                    </p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">Threshold = {seqEval.evaluation.threshold}</p>
+                  </div>
+                  <div className="rounded-md border border-border/50 bg-muted/10 px-3 py-2.5">
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Holdout Events</p>
+                    <p className="text-2xl font-mono font-bold">
+                      {formatNumber(seqEval.evaluation.holdout_events)}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                      {seqEval.evaluation.identities_evaluated} identities · 20% held out
+                    </p>
+                  </div>
+                </div>
+
+                {/* Per-attack coverage */}
+                {seqEval.attack_category_coverage && seqEval.attack_category_coverage.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+                      Per-Attack Coverage on Holdout
+                    </p>
+                    <div className="space-y-2">
+                      {seqEval.attack_category_coverage.map((row) => {
+                        const barColor =
+                          row.coverage_pct >= 70 ? "bg-emerald-500" :
+                          row.coverage_pct >= 40 ? "bg-yellow-500" : "bg-orange-500";
+                        const textColor =
+                          row.coverage_pct >= 70 ? "text-emerald-500" :
+                          row.coverage_pct >= 40 ? "text-yellow-500" : "text-orange-500";
+                        return (
+                          <div key={row.attack_type} className="flex items-center gap-3 text-xs font-mono">
+                            <code className="w-36 shrink-0 text-[10px] bg-muted/30 px-1.5 py-0.5 rounded truncate">
+                              {row.attack_type}
+                            </code>
+                            <div className="flex-1 h-1.5 bg-muted/30 rounded-full overflow-hidden">
+                              <div className={cn("h-full rounded-full", barColor)} style={{ width: `${row.coverage_pct}%` }} />
+                            </div>
+                            <span className={cn("w-12 text-right font-bold shrink-0", textColor)}>
+                              {row.coverage_pct.toFixed(0)}%
+                            </span>
+                            <span className="text-muted-foreground shrink-0 text-[10px]">
+                              {row.captured_at_threshold}/{row.holdout_support}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Model metadata + leakage */}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-border/50 pt-3 text-[11px] text-muted-foreground">
+                  {seqEval.model && (
+                    <>
+                      <span>Architecture: <span className="text-foreground/70 font-mono">GRU next-event predictor</span></span>
+                      <span>Hidden size: <span className="font-mono text-foreground/70">{seqEval.model.hidden_size}</span></span>
+                      <span>Epochs: <span className="font-mono text-foreground/70">{seqEval.model.training_epochs}</span></span>
+                      <span>Windows: <span className="font-mono text-foreground/70">{formatNumber(seqEval.model.training_windows)}</span></span>
+                      <span>Seed: <span className="font-mono text-foreground/70">{seqEval.model.random_seed}</span></span>
+                    </>
+                  )}
+                  {seqEval.label_leakage && (
+                    <span className="flex items-center gap-1">
+                      {seqEval.label_leakage.labels_used_for_training_or_scoring ? (
+                        <XCircle className="h-3 w-3 text-red-500" />
+                      ) : (
+                        <CheckCircle2 className="h-3 w-3 text-emerald-500" />
+                      )}
+                      Labels used for training/scoring:{" "}
+                      <span className={seqEval.label_leakage.labels_used_for_training_or_scoring ? "text-red-400 font-mono" : "text-emerald-400 font-mono"}>
+                        {seqEval.label_leakage.labels_used_for_training_or_scoring ? "YES" : "NO"}
+                      </span>
+                    </span>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* ── Streaming / Production Readiness ────────────────────────────── */}
           <Card>
             <CardHeader className="pb-3">
@@ -534,20 +660,31 @@ export function ModelPerformance() {
                   "Identity Baseline",
                   "Feature Extraction",
                   "Isolation Forest",
+                  { label: "GRU Sequence Detector", highlight: true },
                   "Behavioral Evidence",
                   "Risk Ranking",
                   "Anomaly Classification",
                   "SOC Investigation",
-                ].map((stage, i, arr) => (
-                  <div key={stage} className="flex items-center gap-1.5">
-                    <span className="rounded border border-border/60 bg-muted/20 px-2 py-1 text-foreground/80 whitespace-nowrap">
-                      {stage}
-                    </span>
-                    {i < arr.length - 1 && (
-                      <span className="text-muted-foreground/50 text-base font-light">→</span>
-                    )}
-                  </div>
-                ))}
+                ].map((stage, i, arr) => {
+                  const isObj = typeof stage === "object";
+                  const label = isObj ? stage.label : stage;
+                  const highlight = isObj && stage.highlight;
+                  return (
+                    <div key={label} className="flex items-center gap-1.5">
+                      <span className={cn(
+                        "rounded border px-2 py-1 whitespace-nowrap",
+                        highlight
+                          ? "border-sky-500/40 bg-sky-500/10 text-sky-300"
+                          : "border-border/60 bg-muted/20 text-foreground/80"
+                      )}>
+                        {label}
+                      </span>
+                      {i < arr.length - 1 && (
+                        <span className="text-muted-foreground/50 text-base font-light">→</span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
               <div className="rounded-lg border border-border/50 bg-muted/5 px-4 py-3 text-xs text-muted-foreground space-y-2">
                 <p>

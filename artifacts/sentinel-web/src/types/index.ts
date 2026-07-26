@@ -299,3 +299,76 @@ export interface Top1Metrics {
   f1_score?: number;
   note?: string;
 }
+
+// ─── GRU Sequence Detector ────────────────────────────────────────────────────
+
+export interface SequenceRecentScore {
+  event_id: string;
+  timestamp: string;
+  score: number;
+  prediction_error: number;
+}
+
+export interface SequenceScore {
+  entity_id: string;
+  history_event_count: number;
+  minimum_history_events: number;
+  sequence_length: number;
+  features: string[];
+  score: number | null;
+  prediction_error: number | null;
+  reliable: boolean;
+  status: string;
+  message?: string;
+  recent_scores: SequenceRecentScore[];
+  model?: {
+    type: string;
+    hidden_size: number;
+    training_windows: number;
+    ground_truth_labels_used: boolean;
+  };
+}
+
+export interface SequenceCoverageItem {
+  attack_type: string;
+  holdout_support: number;
+  captured_at_threshold: number;
+  coverage_pct: number;
+}
+
+export interface SequenceEvaluation {
+  has_results: boolean;
+  status: string;
+  evaluation?: {
+    split: string;
+    train_fraction: number;
+    identities_evaluated: number;
+    train_events: number;
+    holdout_events: number;
+    holdout_attack_events: number;
+    sequence_length: number;
+    minimum_history_events: number;
+    threshold: number;
+  };
+  metrics?: {
+    roc_auc: number | null;
+    average_precision: number | null;
+    precision: number;
+    recall: number;
+    f1_score: number;
+    predicted_anomalies: number;
+  };
+  attack_category_coverage?: SequenceCoverageItem[];
+  label_leakage?: {
+    sequence_scores_unchanged: boolean;
+    existing_risk_ranking_unchanged: boolean;
+    labels_used_for_training_or_scoring: boolean;
+  };
+  model?: {
+    type: string;
+    hidden_size: number;
+    training_epochs: number;
+    training_windows: number;
+    random_seed: number;
+  };
+}

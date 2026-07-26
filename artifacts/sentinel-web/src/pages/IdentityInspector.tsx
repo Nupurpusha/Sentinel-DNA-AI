@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams, useLocation } from "wouter";
-import { IdentityResponse, IdentitiesResponse, IdentityRisk, ScoredEvent, TemporalDrift } from "@/types";
+import { IdentityResponse, IdentitiesResponse, IdentityRisk, ScoredEvent, TemporalDrift, SequenceScore } from "@/types";
 import { formatNumber, formatDate, cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import {
   User, Server, MapPin, Clock, Fingerprint, Lock,
-  CheckCircle2, XCircle, ShieldAlert, AlertTriangle, Activity,
+  CheckCircle2, XCircle, ShieldAlert, AlertTriangle, Activity, Network,
 } from "lucide-react";
 
 // ─── Risk helpers ─────────────────────────────────────────────────────────────
@@ -61,6 +61,7 @@ export function IdentityInspector() {
   const [loadingRisk, setLoadingRisk] = useState(false);
 
   const [drift, setDrift] = useState<TemporalDrift | null>(null);
+  const [seqScore, setSeqScore] = useState<SequenceScore | null>(null);
 
   useEffect(() => {
     const fetchIdentities = async () => {
@@ -124,9 +125,20 @@ export function IdentityInspector() {
       }
     };
 
+    const fetchSeqScore = async () => {
+      try {
+        const res = await fetch(`/sentinel-api/detection/sequence/${entityId}`);
+        if (res.ok) setSeqScore(await res.json());
+        else setSeqScore(null);
+      } catch {
+        setSeqScore(null);
+      }
+    };
+
     fetchIdentityData();
     fetchRisk();
     fetchDrift();
+    fetchSeqScore();
   }, [entityId]);
 
   const getLabelColor = (lbl: string) => {
@@ -451,6 +463,128 @@ export function IdentityInspector() {
                   ) : (
                     <p className="text-xs text-muted-foreground">No significant drift signals detected in recent activity windows.</p>
                   )}
+                </CardContent>
+              </Card>
+            );
+          })()}
+
+          {/* ── Sequence Anomaly Score ──────────────────────────────────────── */}
+          {(() => {
+            if (!seqScore) return null;
+
+            if (!seqScore.reliable) {
+              return (
+                <Card className="border-yellow-500/30">
+                  <CardHeader className="pb-3 bg-yellow-500/5 border-b border-yellow-500/15">
+                    <div className="flex items-center gap-2">
+                      <Network className="h-5 w-5 text-yellow-400" />
+                      <CardTitle className="text-base text-yellow-400">Sequence Anomaly Score</CardTitle>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="pt-4">
+                    <div className="flex items-center gap-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-4 py-3">
+                      <AlertTriangle className="h-4 w-4 text-yellow-400 shrink-0" />
+                      <div>
+                        <p className="text-sm font-semibold text-yellow-300">Cold Start — insufficient behavioral history</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Only {seqScore.history_event_count} events recorded; GRU sequence scoring requires at least{" "}
+                          {seqScore.minimum_history_events} chronological events to establish a reliable baseline.
+                          {seqScore.message && ` ${seqScore.message}`}
+                        </p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            }
+
+            const score = seqScore.score ?? 0;
+            const seqBorderColor =
+              score >= 80 ? "border-red-500/20" :
+              score >= 50 ? "border-orange-500/20" :
+              score >= 25 ? "border-yellow-500/20" :
+              "border-emerald-500/20";
+            const seqBarColor =
+              score >= 80 ? "bg-red-500" :
+              score >= 50 ? "bg-orange-500" :
+              score >= 25 ? "bg-yellow-500" :
+              "bg-emerald-500";
+            const seqTextColor =
+              score >= 80 ? "text-red-500" :
+              score >= 50 ? "text-orange-500" :
+              score >= 25 ? "text-yellow-500" :
+              "text-emerald-500";
+            const seqTier =
+              score >= 80 ? "High Anomaly" :
+              score >= 50 ? "Anomalous" :
+              score >= 25 ? "Elevated" :
+              "Normal";
+            const seqTierClass =
+              score >= 80 ? "text-red-400 border-red-500/30 bg-red-500/10" :
+              score >= 50 ? "text-orange-400 border-orange-500/30 bg-orange-500/10" :
+              score >= 25 ? "text-yellow-400 border-yellow-500/30 bg-yellow-500/10" :
+              "text-emerald-400 border-emerald-500/30 bg-emerald-500/10";
+
+            return (
+              <Card className={seqBorderColor}>
+                <CardHeader className="pb-3 border-b border-border/50">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Network className="h-5 w-5 text-muted-foreground" />
+                      <CardTitle className="text-base">Sequence Anomaly Score</CardTitle>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className="text-[10px] px-2 py-0 border border-emerald-500/30 text-emerald-400">
+                        Reliable
+                      </Badge>
+                      <Badge variant="outline" className={cn("text-xs border px-2.5 py-0.5", seqTierClass)}>
+                        {seqTier}
+                      </Badge>
+                    </div>
+                  </div>
+                  <CardDescription className="text-xs mt-1">
+                    GRU next-event predictor scores how much the latest event deviates from learned sequence patterns.
+                    Scores above 50 indicate unusual event ordering or feature combinations. Labels are never used.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="pt-4 space-y-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs text-muted-foreground uppercase tracking-wider">Latest Score</span>
+                      <span className={cn("font-mono font-bold text-sm", seqTextColor)}>
+                        {score.toFixed(1)} / 100
+                      </span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-muted/30 overflow-hidden">
+                      <div
+                        className={cn("h-full rounded-full transition-all", seqBarColor)}
+                        style={{ width: `${Math.min(score, 100)}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between mt-1 text-[10px] text-muted-foreground/60">
+                      <span>Normal (&lt;25)</span><span>Elevated (25–50)</span><span>Anomalous (≥50)</span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-4 text-xs text-muted-foreground pt-1">
+                    <span>
+                      Prediction error:{" "}
+                      <span className="font-mono text-foreground/70">
+                        {seqScore.prediction_error?.toFixed(5) ?? "—"}
+                      </span>
+                    </span>
+                    <span>
+                      History:{" "}
+                      <span className="font-mono text-foreground/70">{seqScore.history_event_count} events</span>
+                    </span>
+                    {seqScore.model && (
+                      <span>
+                        Model:{" "}
+                        <span className="font-mono text-foreground/70">
+                          GRU hidden={seqScore.model.hidden_size} · label-free
+                        </span>
+                      </span>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
             );
