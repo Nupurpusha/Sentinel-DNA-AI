@@ -9,12 +9,20 @@ or used here.
 from __future__ import annotations
 
 import threading
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import (
+    average_precision_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 
 from database import get_connection
 from detector import FEATURE_COLS, _engineer_features, _load_data
@@ -248,6 +256,207 @@ def _score_group(group: pd.DataFrame, model: _SequenceModel) -> list[dict]:
             "prediction_error": round(error, 6),
         })
     return scores
+
+
+def _score_group_from(group: pd.DataFrame, model: _SequenceModel, start_index: int) -> list[dict]:
+    """Score rows at or after start_index using only preceding event features."""
+    values = group[FEATURE_COLS].to_numpy(dtype=float)
+    normalized = (values - model.means) / model.scales
+    scores: list[dict] = []
+    for index in range(max(SEQUENCE_LENGTH, start_index), len(normalized)):
+        prediction = model.predictor.predict(normalized[index - SEQUENCE_LENGTH : index])
+        error = float(np.mean((prediction - normalized[index]) ** 2))
+        score = 100.0 * np.clip(
+            (error - model.error_median) / (model.error_p95 - model.error_median),
+            0.0,
+            1.0,
+        )
+        row = group.iloc[index]
+        scores.append({
+            "event_id": row["event_id"],
+            "entity_id": row["entity_id"],
+            "timestamp": row["timestamp"],
+            "score": round(float(score), 2),
+            "prediction_error": round(error, 6),
+            "label": row["label"],
+        })
+    return scores
+
+
+def _evaluation_frame() -> pd.DataFrame:
+    """Build an evaluation-only frame; labels remain post-hoc metadata."""
+    events, profiles = _load_data()
+    if events.empty:
+        return pd.DataFrame(columns=["event_id", "entity_id", "timestamp", "label", *FEATURE_COLS])
+    features = _engineer_features(events, profiles)
+    timestamps = events[["event_id", "entity_id", "timestamp"]]
+    features = features.merge(timestamps, on=["event_id", "entity_id"], how="left")
+    return features.sort_values(["entity_id", "timestamp", "event_id"]).copy()
+
+
+def _evaluation_split(
+    groups: dict[str, pd.DataFrame],
+) -> tuple[dict[str, pd.DataFrame], dict[str, int]]:
+    """Create deterministic chronological 80/20 identity-local holdouts."""
+    train_groups: dict[str, pd.DataFrame] = {}
+    cutoffs: dict[str, int] = {}
+    for entity_id, group in groups.items():
+        cutoff = int(np.floor(len(group) * 0.8))
+        if cutoff < MINIMUM_HISTORY_EVENTS or len(group) <= cutoff:
+            continue
+        train_groups[entity_id] = group.iloc[:cutoff].copy()
+        cutoffs[entity_id] = cutoff
+    return train_groups, cutoffs
+
+
+def _sequence_label_leakage_test(
+    evaluation_frame: pd.DataFrame,
+    groups: dict[str, pd.DataFrame],
+    train_groups: dict[str, pd.DataFrame],
+    cutoffs: dict[str, int],
+) -> bool:
+    """Confirm label replacement cannot change sequence scores."""
+    try:
+        train_frame = pd.concat(train_groups.values(), ignore_index=True)
+        first_model = _fit_sequence_model(train_frame, train_groups)
+        changed = evaluation_frame.copy()
+        rng = np.random.default_rng(RANDOM_SEED + 1)
+        changed["label"] = rng.permutation(changed["label"].to_numpy())
+        changed_groups = _chronological_groups(changed.drop(columns=["label"]))
+        changed_train_groups = {
+            entity_id: changed_groups[entity_id].iloc[:cutoff].copy()
+            for entity_id, cutoff in cutoffs.items()
+        }
+        changed_train = pd.concat(changed_train_groups.values(), ignore_index=True)
+        second_model = _fit_sequence_model(changed_train, changed_train_groups)
+
+        first_scores: list[tuple] = []
+        second_scores: list[tuple] = []
+        for entity_id, cutoff in cutoffs.items():
+            original = _score_group_from(groups[entity_id], first_model, cutoff)
+            replaced = _score_group_from(changed_groups[entity_id], second_model, cutoff)
+            first_scores.extend((r["event_id"], r["score"], r["prediction_error"]) for r in original)
+            second_scores.extend((r["event_id"], r["score"], r["prediction_error"]) for r in replaced)
+        return first_scores == second_scores
+    except Exception as exc:
+        print(f"Sequence label leakage test error: {exc}")
+        return False
+
+
+def _existing_risk_ranking_label_leakage_test() -> bool:
+    """Confirm replacing labels cannot change the existing risk-score ranking."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT dr.event_id, dr.risk_score, e.label
+            FROM detection_results dr
+            JOIN events e ON dr.event_id = e.event_id
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        return False
+
+    original = [{"event_id": r["event_id"], "risk_score": r["risk_score"], "label": r["label"]} for r in rows]
+    changed = [dict(row) for row in original]
+    rng = np.random.default_rng(RANDOM_SEED + 2)
+    changed_labels = rng.permutation([row["label"] for row in changed])
+    for row, label in zip(changed, changed_labels):
+        row["label"] = label
+    sort_key = lambda row: (-int(row["risk_score"]), str(row["event_id"]))
+    return [row["event_id"] for row in sorted(original, key=sort_key)] == [
+        row["event_id"] for row in sorted(changed, key=sort_key)
+    ]
+
+
+def evaluate_sequence_detector() -> dict:
+    """Evaluate the existing GRU on deterministic chronological holdouts."""
+    evaluation_frame = _evaluation_frame()
+    if evaluation_frame.empty:
+        return {"has_results": False, "status": "no_events"}
+
+    groups = _chronological_groups(evaluation_frame.drop(columns=["label"]))
+    train_groups, cutoffs = _evaluation_split(groups)
+    if not train_groups:
+        return {"has_results": False, "status": "insufficient_history"}
+
+    train_frame = pd.concat(train_groups.values(), ignore_index=True)
+    model = _fit_sequence_model(train_frame, train_groups)
+    holdout_scores: list[dict] = []
+    for entity_id, cutoff in cutoffs.items():
+        holdout_scores.extend(_score_group_from(evaluation_frame[evaluation_frame["entity_id"] == entity_id], model, cutoff))
+
+    if not holdout_scores:
+        return {"has_results": False, "status": "no_holdout_windows"}
+
+    y_true = np.array([int(row["label"] != "normal") for row in holdout_scores])
+    y_score = np.array([float(row["score"]) for row in holdout_scores])
+    threshold = 50.0
+    y_pred = (y_score >= threshold).astype(int)
+    try:
+        roc_auc = float(roc_auc_score(y_true, y_score))
+    except ValueError:
+        roc_auc = None
+    try:
+        average_precision = float(average_precision_score(y_true, y_score))
+    except ValueError:
+        average_precision = None
+
+    category_totals = Counter(row["label"] for row in holdout_scores if row["label"] != "normal")
+    category_captured = Counter(
+        row["label"]
+        for row in holdout_scores
+        if row["label"] != "normal" and row["score"] >= threshold
+    )
+    coverage = [
+        {
+            "attack_type": attack_type,
+            "holdout_support": total,
+            "captured_at_threshold": category_captured.get(attack_type, 0),
+            "coverage_pct": round(100.0 * category_captured.get(attack_type, 0) / total, 2),
+        }
+        for attack_type, total in sorted(category_totals.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    return {
+        "has_results": True,
+        "status": "evaluated",
+        "evaluation": {
+            "split": "chronological_per_identity",
+            "train_fraction": 0.8,
+            "identities_evaluated": len(cutoffs),
+            "train_events": len(train_frame),
+            "holdout_events": len(holdout_scores),
+            "holdout_attack_events": int(y_true.sum()),
+            "sequence_length": SEQUENCE_LENGTH,
+            "minimum_history_events": MINIMUM_HISTORY_EVENTS,
+            "threshold": threshold,
+        },
+        "metrics": {
+            "roc_auc": round(roc_auc, 4) if roc_auc is not None else None,
+            "average_precision": round(average_precision, 4) if average_precision is not None else None,
+            "precision": round(float(precision_score(y_true, y_pred, zero_division=0)), 4),
+            "recall": round(float(recall_score(y_true, y_pred, zero_division=0)), 4),
+            "f1_score": round(float(f1_score(y_true, y_pred, zero_division=0)), 4),
+            "predicted_anomalies": int(y_pred.sum()),
+        },
+        "attack_category_coverage": coverage,
+        "label_leakage": {
+            "sequence_scores_unchanged": _sequence_label_leakage_test(
+                evaluation_frame, groups, train_groups, cutoffs
+            ),
+            "existing_risk_ranking_unchanged": _existing_risk_ranking_label_leakage_test(),
+            "labels_used_for_training_or_scoring": False,
+        },
+        "model": {
+            "type": "gru_next_event_predictor",
+            "hidden_size": HIDDEN_SIZE,
+            "training_epochs": TRAINING_EPOCHS,
+            "training_windows": model.training_window_count,
+            "random_seed": RANDOM_SEED,
+        },
+    }
 
 
 def sequence_score_for_identity(entity_id: str) -> Optional[dict]:

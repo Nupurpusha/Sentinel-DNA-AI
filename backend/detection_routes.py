@@ -23,7 +23,7 @@ from fastapi import APIRouter, HTTPException, Query
 from database import get_connection
 from detector import run_detection, compute_alert_budget
 from temporal import calculate_temporal_drift
-from sequence_detector import sequence_score_for_identity
+from sequence_detector import evaluate_sequence_detector, sequence_score_for_identity
 
 router = APIRouter(prefix="/sentinel-api")
 
@@ -80,6 +80,15 @@ def detection_sequence(entity_id: str):
     if result is None:
         raise HTTPException(status_code=404, detail=f"Identity '{entity_id}' not found")
     return result
+
+
+@router.get("/detection/sequence/evaluation")
+def detection_sequence_evaluation():
+    """Evaluate the existing GRU on chronological holdout events."""
+    try:
+        return evaluate_sequence_detector()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ─── Step 2 routes (preserved) ───────────────────────────────────────────────
