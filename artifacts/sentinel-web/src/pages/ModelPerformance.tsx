@@ -653,38 +653,41 @@ export function ModelPerformance() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Pipeline stages */}
+              {/* Pipeline stages — Isolation Forest and GRU run as parallel signals */}
               <div className="flex flex-wrap items-center gap-1.5 text-xs font-mono">
-                {[
-                  "Telemetry",
-                  "Identity Baseline",
-                  "Feature Extraction",
-                  "Isolation Forest",
-                  { label: "GRU Sequence Detector", highlight: true },
-                  "Behavioral Evidence",
-                  "Risk Ranking",
-                  "Anomaly Classification",
-                  "SOC Investigation",
-                ].map((stage, i, arr) => {
-                  const isObj = typeof stage === "object";
-                  const label = isObj ? stage.label : stage;
-                  const highlight = isObj && stage.highlight;
-                  return (
-                    <div key={label} className="flex items-center gap-1.5">
-                      <span className={cn(
-                        "rounded border px-2 py-1 whitespace-nowrap",
-                        highlight
-                          ? "border-sky-500/40 bg-sky-500/10 text-sky-300"
-                          : "border-border/60 bg-muted/20 text-foreground/80"
-                      )}>
-                        {label}
-                      </span>
-                      {i < arr.length - 1 && (
-                        <span className="text-muted-foreground/50 text-base font-light">→</span>
-                      )}
-                    </div>
-                  );
-                })}
+                {/* Linear prefix */}
+                {["Telemetry", "Identity Baseline", "Feature Extraction"].map((stage) => (
+                  <div key={stage} className="flex items-center gap-1.5">
+                    <span className="rounded border px-2 py-1 whitespace-nowrap border-border/60 bg-muted/20 text-foreground/80">
+                      {stage}
+                    </span>
+                    <span className="text-muted-foreground/50 text-base font-light">→</span>
+                  </div>
+                ))}
+
+                {/* Parallel detector signals */}
+                <div className="flex flex-col gap-1">
+                  <span className="rounded border px-2 py-1 whitespace-nowrap border-border/60 bg-muted/20 text-foreground/80">
+                    Isolation Forest
+                  </span>
+                  <span className="rounded border px-2 py-1 whitespace-nowrap border-sky-500/40 bg-sky-500/10 text-sky-300">
+                    GRU Sequence Detector
+                  </span>
+                </div>
+
+                <span className="text-muted-foreground/50 text-base font-light">→</span>
+
+                {/* Linear suffix */}
+                {["Behavioral Evidence", "Risk Ranking", "Anomaly Classification", "SOC Investigation"].map((stage, i, arr) => (
+                  <div key={stage} className="flex items-center gap-1.5">
+                    <span className="rounded border px-2 py-1 whitespace-nowrap border-border/60 bg-muted/20 text-foreground/80">
+                      {stage}
+                    </span>
+                    {i < arr.length - 1 && (
+                      <span className="text-muted-foreground/50 text-base font-light">→</span>
+                    )}
+                  </div>
+                ))}
               </div>
               <div className="rounded-lg border border-border/50 bg-muted/5 px-4 py-3 text-xs text-muted-foreground space-y-2">
                 <p>
