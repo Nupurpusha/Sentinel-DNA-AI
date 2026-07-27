@@ -43,19 +43,26 @@ RANDOM_SEED = 42
 # This is NOT the operational SOC alert rate — alerts are determined separately
 # via the SOC alert budget (top-N% of final_risk_score ranking).
 CONTAMINATION = 0.05
-N_ESTIMATORS  = 200
+N_ESTIMATORS  = 300        # was 200 — more trees reduce variance
 MODEL_PATH    = os.path.join(os.path.dirname(__file__), "model_cache.pkl")
 
 # ─── Final risk score weights ─────────────────────────────────────────────────
-ML_WEIGHT         = 0.55   # normalized Isolation Forest anomaly strength
-BEHAVIORAL_WEIGHT = 0.45   # behavioral deviation / evidence strength
+# When a GRU sequence score is available (event has >= SEQUENCE_LENGTH prior events
+# for its entity), the GRU provides a third independent signal.
+ML_WEIGHT         = 0.55   # without GRU: normalized Isolation Forest anomaly strength
+BEHAVIORAL_WEIGHT = 0.45   # without GRU: behavioral deviation / evidence strength
+
+# With GRU fusion (three signals):
+ML_WEIGHT_GRU         = 0.45   # Isolation Forest signal
+BEHAVIORAL_WEIGHT_GRU = 0.35   # behavioral deviation signal
+GRU_WEIGHT            = 0.20   # GRU next-event prediction error signal
 
 # Agreement bonus: applied when BOTH the ML signal AND behavioral evidence are high.
 # This rewards cases where the unsupervised ML model AND multiple behavioral
 # deviations agree that an event is suspicious.
-AGREEMENT_THRESHOLD_ML  = 70   # ml_score_norm must be >= this
-AGREEMENT_THRESHOLD_BEH = 60   # behavioral_deviation_score must be >= this
-AGREEMENT_MULTIPLIER    = 1.15  # multiply combined score by this (capped at 100)
+AGREEMENT_THRESHOLD_ML  = 65   # was 70 — captures more concordant high-risk events
+AGREEMENT_THRESHOLD_BEH = 55   # was 60
+AGREEMENT_MULTIPLIER    = 1.20  # was 1.15 — stronger reward for dual-signal agreement
 
 # ─── Risk level thresholds (applied to final_risk_score 0–100) ───────────────
 # Recalibrated so that Critical is genuinely rare.
@@ -71,7 +78,7 @@ THRESHOLD_MEDIUM   = 45   # top ~25-35%
 # The sum can exceed 100; the final behavioral_deviation_score is clipped to 0-100.
 #
 # Binary signals (0 or 1 from feature engineering):
-WEIGHT_AUTH_FAILED             = 15   # authentication failure — high-value signal
+WEIGHT_AUTH_FAILED             = 18   # was 15 — authentication failure is a strong signal
 WEIGHT_DEVICE_UNKNOWN          = 12   # device not in known_devices
 WEIGHT_LOCATION_UNFAMILIAR     = 12   # geo_location differs from primary_location
 WEIGHT_OUTSIDE_HOURS           = 10   # access outside normal_hours window
@@ -81,8 +88,11 @@ WEIGHT_AUTH_METHOD_UNFAMILIAR  =  8   # auth method differs from preferred_auth
 # Graded signals (continuous, mapped to two tiers):
 WEIGHT_SESSION_MILD            =  8   # session_zscore 2.0–3.0  (moderately unusual)
 WEIGHT_SESSION_STRONG          = 12   # session_zscore > 3.0    (very unusual)
-WEIGHT_FAILURE_RATE_MODERATE   =  8   # recent_failure_rate 0.3–0.6
+WEIGHT_FAILURE_RATE_MODERATE   =  8   # recent_failure_rate 0.2–0.6 (threshold lowered from 0.3)
 WEIGHT_FAILURE_RATE_HIGH       = 15   # recent_failure_rate > 0.6  (sustained failures)
+# Graded: consecutive failure streak ending at this event
+WEIGHT_CONSEC_FAILURES_MILD    =  8   # 3–7 consecutive failures (brute-force warmup)
+WEIGHT_CONSEC_FAILURES_HIGH    = 15   # ≥ 8 consecutive failures  (active brute-force)
 
 # ─── Feature columns (label intentionally excluded) ───────────────────────────
 FEATURE_COLS = [
@@ -98,6 +108,7 @@ FEATURE_COLS = [
     "ip_unfamiliar",
     "recent_failure_rate",
     "n_anomaly_signals",
+    "n_consecutive_failures",   # count of consecutive auth failures ending just before this event
 ]
 
 
@@ -158,15 +169,26 @@ def _engineer_features(events: pd.DataFrame, profiles: dict) -> pd.DataFrame:
         .to_dict("index")
     )
 
-    # Rolling recent authentication failure rate (previous 20 events per identity)
+    # Rolling recent authentication failure rate (previous 10 events per identity).
+    # Window shrunk from 20→10 so recent bursts (brute-force) register faster.
+    # Also tracks consecutive failure streak ending just before each event.
     failure_lookup: dict = {}
+    consec_lookup: dict = {}
     for eid, grp in events.groupby("entity_id"):
         grp_sorted = grp.sort_values("timestamp").reset_index(drop=True)
         failures = (~grp_sorted["auth_success"].astype(bool)).astype(float)
+        streak = 0
         for i, row in grp_sorted.iterrows():
-            window = failures[max(0, i - 20): i]
+            # Rolling rate over previous 10 events
+            window = failures[max(0, i - 10): i]
             rate = float(window.mean()) if len(window) > 0 else 0.0
             failure_lookup[row["event_id"]] = rate
+            # Consecutive streak recorded BEFORE updating (streak of prior events)
+            consec_lookup[row["event_id"]] = streak
+            if not bool(row["auth_success"]):
+                streak += 1
+            else:
+                streak = 0
 
     records = []
     for _, ev in events.iterrows():
@@ -212,6 +234,9 @@ def _engineer_features(events: pd.DataFrame, profiles: dict) -> pd.DataFrame:
         # ── Recent failure rate ───────────────────────────────────────────────
         recent_failure_rate = failure_lookup.get(ev["event_id"], 0.0)
 
+        # ── Consecutive failure streak (prior events) ─────────────────────────
+        n_consecutive_failures = float(consec_lookup.get(ev["event_id"], 0))
+
         # ── Aggregate binary signal count ─────────────────────────────────────
         n_anomaly_signals = (
             is_outside_normal_hours + auth_failed + auth_method_unfamiliar
@@ -235,6 +260,7 @@ def _engineer_features(events: pd.DataFrame, profiles: dict) -> pd.DataFrame:
             "ip_unfamiliar":            float(ip_unfamiliar),
             "recent_failure_rate":      float(recent_failure_rate),
             "n_anomaly_signals":        float(n_anomaly_signals),
+            "n_consecutive_failures":   n_consecutive_failures,
         })
 
     return pd.DataFrame(records)
@@ -278,31 +304,53 @@ def _behavioral_evidence(row: dict) -> tuple:
     elif zscore > 2.0:
         score += WEIGHT_SESSION_MILD; count += 1
 
-    # Graded: recent authentication failure rate (two tiers)
+    # Graded: recent authentication failure rate (two tiers; lower first tier 0.3→0.2)
     fail_rate = float(row.get("recent_failure_rate", 0.0))
     if fail_rate > 0.6:
         score += WEIGHT_FAILURE_RATE_HIGH; count += 1
-    elif fail_rate > 0.3:
+    elif fail_rate > 0.2:
         score += WEIGHT_FAILURE_RATE_MODERATE; count += 1
+
+    # Graded: consecutive failure streak (two tiers) — sensitive to brute-force bursts
+    n_consec = int(row.get("n_consecutive_failures", 0))
+    if n_consec >= 8:
+        score += WEIGHT_CONSEC_FAILURES_HIGH; count += 1
+    elif n_consec >= 3:
+        score += WEIGHT_CONSEC_FAILURES_MILD; count += 1
 
     return min(100, score), count
 
 
-def _compute_final_risk_score(ml_score_norm: int, beh_score: int) -> int:
+def _compute_final_risk_score(
+    ml_score_norm: int,
+    beh_score: int,
+    gru_score: Optional[float] = None,
+) -> int:
     """
-    Combine normalized ML anomaly strength with behavioral evidence strength.
+    Combine normalized ML anomaly strength, behavioral evidence strength, and
+    (when available) GRU sequence prediction error into a final risk score.
 
-    Formula:
+    Two-signal formula (no GRU — cold-start events or entities with < SEQUENCE_LENGTH events):
         combined = 0.55 * ml_score_norm + 0.45 * behavioral_deviation_score
 
-    Agreement bonus (×1.15, capped at 100):
-        Applied when BOTH the ML model AND behavioral evidence are strongly elevated.
-        This rewards high-confidence events where unsupervised ML and behavioral
-        deviation analysis independently agree the event is suspicious.
+    Three-signal formula (GRU available):
+        combined = 0.45 * ml_score_norm + 0.35 * behavioral_deviation_score + 0.20 * gru_score
+
+    Agreement bonus (×AGREEMENT_MULTIPLIER, capped at 100):
+        Applied when BOTH the ML model AND behavioral evidence are elevated.
+        Rewards high-confidence events where independent signals agree.
 
     Never uses ground-truth labels.
     """
-    combined = ML_WEIGHT * ml_score_norm + BEHAVIORAL_WEIGHT * beh_score
+    if gru_score is not None:
+        combined = (
+            ML_WEIGHT_GRU * ml_score_norm
+            + BEHAVIORAL_WEIGHT_GRU * beh_score
+            + GRU_WEIGHT * gru_score
+        )
+    else:
+        combined = ML_WEIGHT * ml_score_norm + BEHAVIORAL_WEIGHT * beh_score
+
     if ml_score_norm >= AGREEMENT_THRESHOLD_ML and beh_score >= AGREEMENT_THRESHOLD_BEH:
         combined = combined * AGREEMENT_MULTIPLIER
     return int(min(100, round(combined)))
@@ -333,9 +381,14 @@ def _train_and_score(feat_df: pd.DataFrame) -> pd.DataFrame:
     """
     1. Trains Isolation Forest on FEATURE_COLS only (label excluded).
     2. Normalizes IF decision score to ml_score_norm (0–100).
-    3. Computes behavioral_deviation_score and evidence_count per event.
-    4. Combines into final_risk_score = 0.55 * ml + 0.45 * behavioral + agreement bonus.
-    5. Assigns recalibrated risk_level from final_risk_score.
+    3. Computes GRU sequence score per event (label-free; lazy-imported to avoid
+       circular import at module load time).
+    4. Computes behavioral_deviation_score and evidence_count per event.
+    5. Combines into final_risk_score:
+         - Three-signal: 0.45*ml + 0.35*behavioral + 0.20*gru  (when GRU available)
+         - Two-signal:   0.55*ml + 0.45*behavioral             (cold-start events)
+         + agreement bonus when both ML and behavioral exceed their thresholds.
+    6. Assigns recalibrated risk_level from final_risk_score.
     """
     X = feat_df[FEATURE_COLS].values   # label column intentionally excluded
 
@@ -369,6 +422,21 @@ def _train_and_score(feat_df: pd.DataFrame) -> pd.DataFrame:
     else:
         ml_norms = np.zeros(len(raw_anomaly), dtype=int)
 
+    # ── GRU sequence score (lazy import avoids circular dependency at load time) ──
+    # sequence_detector imports FEATURE_COLS and helpers from this module at the top
+    # level, so we must not import it at the top of detector.py.  Importing inside
+    # this function is safe because by call-time both modules are fully initialised.
+    gru_score_map: dict = {}
+    try:
+        from sequence_detector import batch_score_all_events  # noqa: PLC0415
+        # Pass only the label-free feature frame (labels are stripped inside)
+        feat_no_label = feat_df.drop(columns=["label"], errors="ignore")
+        gru_score_map = batch_score_all_events(feat_no_label)
+        n_scored = sum(1 for v in gru_score_map.values() if v is not None)
+        print(f"GRU batch scoring: {n_scored}/{len(feat_df)} events scored.")
+    except Exception as exc:
+        print(f"GRU batch scoring skipped (will use two-signal formula): {exc}")
+
     # Compute behavioral evidence and final risk score per event
     out = feat_df.copy()
     out["predicted_anomaly"] = (preds == -1).astype(int)
@@ -379,19 +447,24 @@ def _train_and_score(feat_df: pd.DataFrame) -> pd.DataFrame:
     ev_counts   = []
     final_risks = []
     risk_levels = []
+    gru_scores_out = []
 
     for i, row in out.iterrows():
-        beh_score, ev_count = _behavioral_evidence(row.to_dict())
-        ml_norm = int(row["ml_score_norm"])
-        final   = _compute_final_risk_score(ml_norm, beh_score)
-        level   = _risk_level(final)
+        row_d = row.to_dict()
+        beh_score, ev_count = _behavioral_evidence(row_d)
+        ml_norm  = int(row["ml_score_norm"])
+        gru_val  = gru_score_map.get(str(row["event_id"]))   # None for cold-start events
+        final    = _compute_final_risk_score(ml_norm, beh_score, gru_val)
+        level    = _risk_level(final)
         beh_scores.append(beh_score)
         ev_counts.append(ev_count)
         final_risks.append(final)
         risk_levels.append(level)
+        gru_scores_out.append(gru_val)
 
     out["behavioral_deviation_score"] = beh_scores
     out["evidence_count"]             = ev_counts
+    out["gru_score"]                  = gru_scores_out
     out["risk_score"]                 = final_risks    # final_risk_score stored in risk_score for API compatibility
     out["risk_level"]                 = risk_levels
 
@@ -428,8 +501,16 @@ def _generate_explanation(row: dict) -> list:
     fail_rate = float(row.get("recent_failure_rate", 0))
     if fail_rate > 0.6:
         reasons.append("Very high recent authentication failure rate")
-    elif fail_rate > 0.3:
+    elif fail_rate > 0.2:
         reasons.append("High recent authentication failure rate")
+    n_consec = int(row.get("n_consecutive_failures", 0))
+    if n_consec >= 8:
+        reasons.append(f"Active brute-force streak ({n_consec} consecutive failures)")
+    elif n_consec >= 3:
+        reasons.append(f"Consecutive authentication failure streak ({n_consec} events)")
+    gru_val = row.get("gru_score")
+    if gru_val is not None and float(gru_val) >= 75:
+        reasons.append("Anomalous behavioral sequence (GRU prediction error elevated)")
     if not reasons:
         reasons.append("Subtle multi-feature behavioral deviation")
     return reasons
@@ -438,10 +519,10 @@ def _generate_explanation(row: dict) -> list:
 # ─── Persistence ──────────────────────────────────────────────────────────────
 
 def _persist_results(classified_df: pd.DataFrame):
-    """Write all detection results to the detection_results table (Step 6 schema)."""
+    """Write all detection results to the detection_results table (Step 7 schema)."""
     conn = get_connection()
     try:
-        # Drop and recreate to ensure the full Step 6 schema is present.
+        # Drop and recreate to ensure the full Step 7 schema is present.
         conn.execute("DROP TABLE IF EXISTS detection_results")
         conn.execute("""
             CREATE TABLE detection_results (
@@ -451,6 +532,7 @@ def _persist_results(classified_df: pd.DataFrame):
                 ml_score_norm              INTEGER NOT NULL DEFAULT 0,
                 behavioral_deviation_score INTEGER NOT NULL DEFAULT 0,
                 evidence_count             INTEGER NOT NULL DEFAULT 0,
+                gru_score                  REAL,
                 risk_score                 INTEGER NOT NULL,
                 predicted_anomaly          INTEGER NOT NULL,
                 risk_level                 TEXT NOT NULL,
@@ -464,6 +546,7 @@ def _persist_results(classified_df: pd.DataFrame):
         rows = []
         for _, row in classified_df.iterrows():
             reasons = _generate_explanation(row.to_dict())
+            gru_val = row.get("gru_score")
             rows.append((
                 row["event_id"],
                 row["entity_id"],
@@ -471,6 +554,7 @@ def _persist_results(classified_df: pd.DataFrame):
                 int(row["ml_score_norm"]),
                 int(row["behavioral_deviation_score"]),
                 int(row["evidence_count"]),
+                float(gru_val) if gru_val is not None else None,
                 int(row["risk_score"]),
                 int(row["predicted_anomaly"]),
                 row["risk_level"],
@@ -483,14 +567,14 @@ def _persist_results(classified_df: pd.DataFrame):
         conn.executemany(
             """INSERT OR REPLACE INTO detection_results
                (event_id, entity_id, anomaly_score, ml_score_norm,
-                behavioral_deviation_score, evidence_count,
+                behavioral_deviation_score, evidence_count, gru_score,
                 risk_score, predicted_anomaly, risk_level, reasons,
                 predicted_anomaly_type, classification_confidence, classification_reasons)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             rows,
         )
         conn.commit()
-        print(f"Persisted {len(rows)} detection results to SQLite (Step 6 schema).")
+        print(f"Persisted {len(rows)} detection results to SQLite (Step 7 schema with GRU fusion).")
     except Exception as exc:
         conn.rollback()
         raise exc

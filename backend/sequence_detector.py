@@ -30,9 +30,9 @@ from detector import FEATURE_COLS, _engineer_features, _load_data
 
 MINIMUM_HISTORY_EVENTS = 50
 SEQUENCE_LENGTH = 12
-HIDDEN_SIZE = 16
-TRAINING_WINDOWS = 1800
-TRAINING_EPOCHS = 3
+HIDDEN_SIZE = 32           # was 16 — larger hidden state improves sequence representation
+TRAINING_WINDOWS = 4000    # was 1800 — more training coverage
+TRAINING_EPOCHS = 8        # was 3 — more passes through windows
 RANDOM_SEED = 20260726
 
 
@@ -86,7 +86,7 @@ class GRUSequencePredictor:
         self,
         windows: list[tuple[np.ndarray, np.ndarray]],
         epochs: int = TRAINING_EPOCHS,
-        learning_rate: float = 0.008,
+        learning_rate: float = 0.005,  # was 0.008 — smaller step reduces overshoot
     ) -> None:
         """Fit the GRU on unlabeled input windows and next-event targets."""
         for _ in range(epochs):
@@ -234,6 +234,51 @@ def _get_model(features: pd.DataFrame, groups: dict[str, pd.DataFrame]) -> _Sequ
         if _MODEL is None or _MODEL.event_count != len(features):
             _MODEL = _fit_sequence_model(features, groups)
         return _MODEL
+
+
+def batch_score_all_events(feat_df: pd.DataFrame) -> dict:
+    """
+    Train GRU on all events (no labels) and return a per-event sequence score.
+
+    Trains on the full chronological event set so scoring coverage matches the
+    Isolation Forest (which also trains on all events).  Events that lack at
+    least SEQUENCE_LENGTH prior events for their entity receive None — the
+    caller uses the two-signal formula for those.
+
+    ABSOLUTE RULE: labels must never enter this function.  feat_df must already
+    have the 'label' column stripped before being passed here.
+    """
+    if feat_df.empty:
+        return {}
+
+    # Safety: drop labels if accidentally present
+    features = feat_df.drop(columns=["label"], errors="ignore")
+
+    groups = _chronological_groups(features)
+
+    # Fit on the full dataset (unsupervised; no labels used)
+    model = _fit_sequence_model(features, groups)
+
+    score_map: dict = {}
+    for entity_id, group in groups.items():
+        values     = group[FEATURE_COLS].to_numpy(dtype=float)
+        normalized = (values - model.means) / model.scales
+        for index in range(len(normalized)):
+            row    = group.iloc[index]
+            eid    = str(row["event_id"])
+            if index < SEQUENCE_LENGTH:
+                score_map[eid] = None   # insufficient history
+            else:
+                prediction = model.predictor.predict(normalized[index - SEQUENCE_LENGTH : index])
+                error = float(np.mean((prediction - normalized[index]) ** 2))
+                score = 100.0 * np.clip(
+                    (error - model.error_median) / (model.error_p95 - model.error_median),
+                    0.0,
+                    1.0,
+                )
+                score_map[eid] = round(float(score), 2)
+
+    return score_map
 
 
 def _score_group(group: pd.DataFrame, model: _SequenceModel) -> list[dict]:
